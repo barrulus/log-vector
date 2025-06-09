@@ -1,6 +1,6 @@
-# Code Retrieval System
+# Log File Analysis System
 
-A powerful semantic search system for codebases that enables natural language queries over your code repositories using vector embeddings and local LLM integration.
+A powerful semantic search system for log files that enables natural language queries over your logs using vector embeddings and local LLM integration.
 
 ## Features
 

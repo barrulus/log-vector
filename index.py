@@ -88,7 +88,7 @@ class LocalEmbeddingHandler(EmbeddingHandler):
                 console.print("[yellow]! CUDA not available, using CPU[/yellow]")
                 self.device = 'cpu'
                 
-            self.transformer = SentenceTransformer(self.model, device=self.device)
+            self.transformer = SentenceTransformer(self.model, trust_remote_code=True, device=self.device)
             self.transformer.max_seq_length = 512
         except ImportError:
             raise ImportError("sentence-transformers not installed. Run: pip install sentence-transformers")

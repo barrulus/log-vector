@@ -16,6 +16,22 @@ A powerful semantic search system for log files that enables natural language qu
 
 ### 1. Install Dependencies
 
+I advise you run in a venv.
+
+```bash
+python -m venv venv
+source venv/bin/activate
+```
+
+or on Windows
+
+```ps1
+python.exe -m venv venv
+.\venv\Scripts\Activate
+```
+
+then
+
 ```bash
 pip install -r requirements.txt
 ```

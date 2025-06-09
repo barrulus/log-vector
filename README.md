@@ -277,3 +277,9 @@ The system automatically detects and works with databases created by older versi
 ## License
 
 This project is designed for local development and research use. Please ensure compliance with the terms of service for any external models or APIs used.
+
+## Contributions
+
+I welcome any assistance on this project, especially around trying new models for better performance and testing against ore logs than I have at my disposal!
+
+Please just fork off of dev and then submit a PR

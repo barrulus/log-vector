@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Unified Code Indexer with Multiple Embedding Options
+Unified Log File Indexer with Multiple Embedding Options
 
-This script indexes a codebase for semantic search using various embedding strategies:
+This script indexes a path of log files for semantic search using various embedding strategies:
 - Local embeddings using SentenceTransformer
 - Ollama embeddings using Ollama's API
 - Remote embeddings using a dedicated embedding server
@@ -15,7 +15,7 @@ Options:
     --ollama-embeddings   Use Ollama's embedding API
     --remote-embeddings   Use remote embedding server
     --model MODEL         Specify embedding model (overrides .env)
-    --chunk-size SIZE     Size of code chunks (default: 2000)
+    --chunk-size SIZE     Size of log chunks (default: 2000)
 """
 
 import os
@@ -214,7 +214,7 @@ def collect_files(repo_path: Path) -> List[Path]:
 
 
 def chunk_code(content: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> List[str]:
-    """Split code into chunks"""
+    """Split logs into chunks"""
     chunks: List[str] = []
     lines = content.split('\n')
     current_chunk: List[str] = []
@@ -380,7 +380,7 @@ def save_metadata(repo_path: Path, embedding_type: str, model: str, chunk_size: 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Index a codebase for semantic search",
+        description="Index log files for semantic search",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -416,7 +416,7 @@ def main() -> None:
         '--chunk-size', 
         type=int, 
         default=DEFAULT_CHUNK_SIZE,
-        help=f'Size of code chunks (default: {DEFAULT_CHUNK_SIZE})'
+        help=f'Size of log file chunks (default: {DEFAULT_CHUNK_SIZE})'
     )
     parser.add_argument(
         '--chroma-path',
@@ -436,7 +436,7 @@ def main() -> None:
         console.print(f"[red]Error: Repository path does not exist: {repo_path}[/red]")
         sys.exit(1)
     
-    console.print(f"\n[bold cyan]Code Indexer[/bold cyan]")
+    console.print(f"\n[bold cyan]Log Indexer[/bold cyan]")
     console.print(f"Repository: {repo_path}")
     
     # Determine embedding type

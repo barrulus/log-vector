@@ -1,0 +1,9 @@
+chromadb
+sentence-transformers
+ollama
+tiktoken
+einops
+python-dotenv
+rich
+flask
+requests

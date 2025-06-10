@@ -9,7 +9,8 @@ A powerful semantic search system for log files that enables natural language qu
 - **Local LLM Integration**: Generates AI responses using Ollama with customizable models
 - **Interactive Query Interface**: Rich terminal interface with markdown rendering
 - **GPU Acceleration**: Optional GPU support for faster embedding generation
-- **Comprehensive File Support**: Indexes `.py`, `.log`, `.js`, `.ts`, `.md`, `.sql`, `.html`, `.csv` files
+- **Automatic File Detection**: Intelligently detects and indexes all text-based files by content analysis
+- **Security-First Trust Management**: Configurable trust_remote_code handling with user consent and model tracking
 - **Environment Configuration**: Fully configurable via `.env` files
 
 ## Quick Start
@@ -149,6 +150,7 @@ python ask.py my_queries.md
 | `CHROMA_PATH` | ChromaDB storage path | `./chroma_code` |
 | `USE_LOCAL_EMBEDDINGS` | Default embedding strategy | `true` |
 | `USE_LOCAL_OLLAMA` | Use local Ollama instance | `true` |
+| `TRUST_REMOTE_CODE_*` | Model-specific trust settings | Auto-managed |
 
 ### Command Line Options
 
@@ -178,6 +180,50 @@ Options:
   --max-length LENGTH    Max sequence length (default: 512)
   --batch-size SIZE      Encoding batch size (default: 32)
   --debug                Enable debug mode
+```
+
+## Security: Trust Remote Code Management
+
+The system includes built-in security management for models that require `trust_remote_code=True`. This feature:
+
+- **Auto-detects** which models likely need remote code execution
+- **Prompts for user consent** with clear risk warnings
+- **Saves decisions** in `.env` with model-specific tracking
+- **Re-prompts on model changes** for ongoing security
+
+### Managing Trust Settings
+
+```bash
+# List all approved/denied models
+python trust_manager.py --list
+
+# Check if a specific model needs trust_remote_code
+python trust_manager.py --check "nomic-ai/nomic-embed-text-v1.5"
+```
+
+When you first use a model requiring remote code, you'll see:
+
+```
+==============================================================
+SECURITY WARNING: Remote Code Execution
+==============================================================
+Model: nomic-ai/nomic-embed-text-v1.5
+
+This model may require 'trust_remote_code=True' which allows
+the model to execute arbitrary code during loading.
+
+RISKS:
+- The model could execute malicious code
+- Your system could be compromised
+- Data could be stolen or corrupted
+
+BENEFITS:
+- Access to newer/specialized models
+- Better embedding quality for some models
+
+Your choice will be saved for this model.
+==============================================================
+Allow remote code execution for this model? [y/N]:
 ```
 
 ## Advanced Usage
@@ -269,6 +315,7 @@ The system automatically detects and works with databases created by older versi
 ├── index.py              # Unified indexing script
 ├── ask.py                # Interactive query interface  
 ├── embedding_server.py   # Remote embedding server
+├── trust_manager.py      # Security: trust_remote_code management
 ├── requirements.txt      # Python dependencies
 ├── .env_example         # Environment configuration template
 └── chroma_code/         # Default ChromaDB storage (created after indexing)

@@ -33,6 +33,7 @@ app = Flask(__name__)
 model: Optional[SentenceTransformer] = None
 device: Optional[str] = None
 args: Optional[argparse.Namespace] = None
+model_cache: Dict[str, SentenceTransformer] = {}  # Cache models with different trust settings
 
 
 def initialize_model() -> None:
@@ -68,21 +69,42 @@ def initialize_model() -> None:
     
     print(f"\nUsing device: {device}")
     
-    # Load model
-    model = SentenceTransformer(args.model, device=device, trust_remote_code=True)
+    # Load default model
+    from sentence_transformers import SentenceTransformer
+    model = SentenceTransformer(args.model, device=device, trust_remote_code=False)
     model.max_seq_length = args.max_length
     
-    print(f"Model loaded successfully!")
+    print(f"Default model loaded: {args.model}")
     print(f"Max sequence length: {args.max_length}")
     print(f"Batch size: {args.batch_size}")
+    print(f"Note: trust_remote_code can be overridden per request")
+
+
+def get_or_load_model(model_name: str, trust_remote_code: bool) -> SentenceTransformer:
+    """Get or load a model with specific trust_remote_code setting"""
+    global model_cache, device, args
+    
+    if args is None:
+        raise RuntimeError("Server not initialized")
+    
+    # Create cache key
+    cache_key = f"{model_name}:trust={trust_remote_code}"
+    
+    if cache_key not in model_cache:
+        print(f"Loading model {model_name} with trust_remote_code={trust_remote_code}")
+        loaded_model = SentenceTransformer(model_name, device=device, trust_remote_code=trust_remote_code)
+        loaded_model.max_seq_length = args.max_length
+        model_cache[cache_key] = loaded_model
+    
+    return model_cache[cache_key]
 
 
 @app.route('/embed', methods=['POST'])
 def embed() -> Any:
     """Generate embeddings for provided texts"""
     try:
-        if model is None or args is None:
-            return jsonify({'error': 'Model not initialized'}), 500
+        if args is None:
+            return jsonify({'error': 'Server not initialized'}), 500
             
         data = request.json
         if data is None:
@@ -90,21 +112,17 @@ def embed() -> Any:
         data = cast(Dict[str, Any], data)
             
         texts = data.get('texts', [])
-        
-        # Allow model override per request
-        request_model = data.get('model')
-        if request_model and request_model != args.model:
-            # For now, we don't support dynamic model switching
-            # This could be implemented with a model cache
-            return jsonify({
-                'error': f'Model switching not supported. Server is using: {args.model}'
-            }), 400
+        request_model = data.get('model', args.model)
+        trust_remote_code = data.get('trust_remote_code', False)
         
         if not texts:
             return jsonify({'error': 'No texts provided'}), 400
         
+        # Get the appropriate model
+        model_to_use = get_or_load_model(request_model, trust_remote_code)
+        
         # Generate embeddings on GPU/CPU
-        embeddings_result = cast(Any, model.encode(  # type: ignore[misc]
+        embeddings_result = cast(Any, model_to_use.encode(  # type: ignore[misc]
             texts, 
             batch_size=args.batch_size, 
             show_progress_bar=False,
@@ -114,7 +132,8 @@ def embed() -> Any:
         
         return jsonify({
             'embeddings': embeddings,
-            'model': args.model,
+            'model': request_model,
+            'trust_remote_code': trust_remote_code,
             'count': len(embeddings)
         })
     

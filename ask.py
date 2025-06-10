@@ -168,7 +168,8 @@ class QueryHandler:
             
             if not self._local_model:
                 console.print("[yellow]Loading local embedding model...[/yellow]")
-                self._local_model = SentenceTransformer(self.embedding_model, trust_remote_code=True)
+                from trust_manager import safe_sentence_transformer_load
+                self._local_model = safe_sentence_transformer_load(self.embedding_model)
                 self._local_model.max_seq_length = 512
             
             embedding = self._local_model.encode([text], show_progress_bar=False)
@@ -198,9 +199,18 @@ class QueryHandler:
     def _get_embedding_remote(self, text: str) -> List[float]:
         """Get embedding from remote server"""
         try:
+            # Get trust setting for this model
+            from trust_manager import TrustManager
+            trust_manager = TrustManager()
+            trust_remote_code = trust_manager.get_trust_setting(self.embedding_model, interactive=True)
+            
             response = requests.post(
                 f"{EMBEDDING_SERVER}/embed",
-                json={"texts": [text], "model": self.embedding_model},
+                json={
+                    "texts": [text], 
+                    "model": self.embedding_model,
+                    "trust_remote_code": trust_remote_code
+                },
                 timeout=60
             )
             response.raise_for_status()

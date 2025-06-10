@@ -39,7 +39,7 @@ load_dotenv()
 
 # Configuration from environment
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'dolphincoder:15b')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen3:8b')
 EMBEDDING_SERVER = os.getenv('EMBEDDING_SERVER', 'http://localhost:5000')
 EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'nomic-ai/nomic-embed-text-v1.5')
 CHROMA_PATH = os.getenv('CHROMA_PATH', './chroma_code')
@@ -87,7 +87,8 @@ class LocalEmbeddingHandler(EmbeddingHandler):
                 console.print("[yellow]! CUDA not available, using CPU[/yellow]")
                 self.device = 'cpu'
                 
-            self.transformer = SentenceTransformer(self.model, trust_remote_code=True, device=self.device)
+            from trust_manager import safe_sentence_transformer_load
+            self.transformer = safe_sentence_transformer_load(self.model, device=self.device)
             self.transformer.max_seq_length = 512
         except ImportError:
             raise ImportError("sentence-transformers not installed. Run: pip install sentence-transformers")
@@ -163,6 +164,13 @@ class RemoteEmbeddingHandler(EmbeddingHandler):
         self.base_url: str = EMBEDDING_SERVER
         self.max_retries: int = 3
         self.retry_delay: int = 1
+        self.trust_remote_code: bool = self._get_trust_setting()
+    
+    def _get_trust_setting(self) -> bool:
+        """Get trust_remote_code setting for this model"""
+        from trust_manager import TrustManager
+        trust_manager = TrustManager()
+        return trust_manager.get_trust_setting(self.model, interactive=True)
         
     def embed(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using remote server with retry logic"""
@@ -170,7 +178,11 @@ class RemoteEmbeddingHandler(EmbeddingHandler):
             try:
                 response = requests.post(
                     f"{self.base_url}/embed",
-                    json={"texts": texts, "model": self.model},
+                    json={
+                        "texts": texts, 
+                        "model": self.model,
+                        "trust_remote_code": self.trust_remote_code
+                    },
                     timeout=60
                 )
                 response.raise_for_status()
@@ -201,8 +213,8 @@ class RemoteEmbeddingHandler(EmbeddingHandler):
 def is_indexable_file(file_path: Path) -> bool:
     """Determine if a file can be indexed by examining its content"""
     try:
-        # Skip if file is too large (> 10MB)
-        if file_path.stat().st_size > 10 * 1024 * 1024:
+        # Skip if file is too large (> 100MB)
+        if file_path.stat().st_size > 100 * 1024 * 1024:
             return False
             
         with open(file_path, 'rb') as f:

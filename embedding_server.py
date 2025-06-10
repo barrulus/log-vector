@@ -45,26 +45,34 @@ def initialize_model() -> None:
     
     print(f"\nLoading SentenceTransformer model: {args.model}")
     
-    # CUDA Diagnostics
-    print("\nCUDA Diagnostics:")
+    # GPU Acceleration Diagnostics
+    print("\nGPU Acceleration Diagnostics:")
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
+    
+    # Check for MPS (Apple Silicon GPU)
+    mps_available = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+    print(f"MPS (Apple Silicon) available: {mps_available}")
     
     if torch.cuda.is_available():
         if hasattr(torch, 'version') and hasattr(torch.version, 'cuda') and torch.version.cuda:  # type: ignore[attr-defined]
             print(f"PyTorch CUDA version: {torch.version.cuda}")  # type: ignore[attr-defined]
-        print(f"Number of GPUs: {torch.cuda.device_count()}")
+        print(f"Number of CUDA GPUs: {torch.cuda.device_count()}")
         for i in range(torch.cuda.device_count()):
-            print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            print(f"CUDA GPU {i}: {torch.cuda.get_device_name(i)}")
             props = cast(Any, torch.cuda.get_device_properties(i))  # type: ignore[misc]
-            print(f"GPU {i} Memory: {props.total_memory / 1024**3:.1f} GB")
+            print(f"CUDA GPU {i} Memory: {props.total_memory / 1024**3:.1f} GB")
         device = 'cuda'
+    elif mps_available:
+        print("Using Apple Silicon GPU (MPS) for acceleration")
+        device = 'mps'
     else:
-        print("CUDA not available. Reasons could be:")
-        print("1. NVIDIA GPU not present")
-        print("2. CUDA drivers not installed")
-        print("3. PyTorch not compiled with CUDA support")
-        print("4. Environment variables not set correctly")
+        print("No GPU acceleration available. Using CPU.")
+        print("Possible reasons:")
+        print("- No NVIDIA GPU (for CUDA)")
+        print("- No Apple Silicon chip (for MPS)")
+        print("- PyTorch not compiled with GPU support")
+        print("- Missing drivers or environment setup")
         device = 'cpu'
     
     print(f"\nUsing device: {device}")

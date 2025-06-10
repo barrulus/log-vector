@@ -78,12 +78,15 @@ class LocalEmbeddingHandler(EmbeddingHandler):
         try:
             import torch
             
-            # Check for CUDA availability
+            # Check for GPU acceleration
             if torch.cuda.is_available():
                 console.print(f"[green]✓ CUDA available: {torch.cuda.get_device_name(0)}[/green]")
                 self.device = 'cuda'
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                console.print("[green]✓ Apple Silicon GPU (MPS) available[/green]")
+                self.device = 'mps'
             else:
-                console.print("[yellow]! CUDA not available, using CPU[/yellow]")
+                console.print("[yellow]! No GPU acceleration available, using CPU[/yellow]")
                 self.device = 'cpu'
                 
             from trust_manager import safe_sentence_transformer_load  # type: ignore[import]

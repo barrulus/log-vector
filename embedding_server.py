@@ -18,6 +18,7 @@ Options:
 
 import argparse
 import os
+import logging
 from typing import Any, Dict, Optional, cast
 from flask import Flask, request, jsonify
 from sentence_transformers import SentenceTransformer
@@ -28,6 +29,9 @@ from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+
+# Configure logging
+logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Global variables for model
 model: Optional[SentenceTransformer] = None
@@ -155,7 +159,10 @@ def embed() -> Any:
         })
     
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        # Log the full error details for debugging
+        logging.error(f"Error in /embed endpoint: {str(e)}", exc_info=True)
+        # Return generic error message to client
+        return jsonify({'error': 'An internal server error occurred'}), 500
 
 
 @app.route('/health', methods=['GET'])

@@ -69,20 +69,29 @@ def initialize_model() -> None:
     
     print(f"\nUsing device: {device}")
     
-    # Load default model
-    from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(args.model, device=device, trust_remote_code=False)
-    model.max_seq_length = args.max_length
+    # Determine trust setting for default model
+    if args.trust_remote_code:
+        default_trust = True
+        print(f"Using --trust-remote-code flag: trust_remote_code=True for {args.model}")
+    else:
+        from trust_manager import TrustManager
+        trust_manager = TrustManager()
+        default_trust = trust_manager.check_model_needs_trust(args.model)
+        print(f"Auto-detected trust_remote_code={default_trust} for {args.model}")
+    
+    # Load default model with appropriate trust setting
+    model = get_or_load_model(args.model, default_trust)
     
     print(f"Default model loaded: {args.model}")
     print(f"Max sequence length: {args.max_length}")
     print(f"Batch size: {args.batch_size}")
-    print(f"Note: trust_remote_code can be overridden per request")
+    print(f"Note: Client requests can override model and trust settings")
 
 
 def get_or_load_model(model_name: str, trust_remote_code: bool) -> SentenceTransformer:
     """Get or load a model with specific trust_remote_code setting"""
     global model_cache, device, args
+    from sentence_transformers import SentenceTransformer
     
     if args is None:
         raise RuntimeError("Server not initialized")
@@ -227,6 +236,11 @@ def main() -> None:
         '--debug',
         action='store_true',
         help='Run in debug mode'
+    )
+    parser.add_argument(
+        '--trust-remote-code',
+        action='store_true',
+        help='Force trust_remote_code=True for default model (auto-detected if not specified)'
     )
     
     args = parser.parse_args()

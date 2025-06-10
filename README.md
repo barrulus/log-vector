@@ -10,7 +10,7 @@ A powerful semantic search system for log files that enables natural language qu
 - **Interactive Query Interface**: Rich terminal interface with markdown rendering
 - **GPU Acceleration**: Optional GPU support for faster embedding generation
 - **Automatic File Detection**: Intelligently detects and indexes all text-based files by content analysis
-- **Security-First Trust Management**: Configurable trust_remote_code handling with user consent and model tracking
+- **Security-First Design**: Client-side trust_remote_code management with consent prompts and persistent tracking
 - **Environment Configuration**: Fully configurable via `.env` files
 
 ## Quick Start
@@ -64,25 +64,30 @@ USE_LOCAL_EMBEDDINGS=true
 USE_LOCAL_OLLAMA=true
 ```
 
-### 3. Index Your Log Files
+### 3. Index Your Files
 
-Index a directory using local embeddings (default):
+Index a directory with automatic file detection:
 
 ```bash
-python index.py /path/to/your/logs
+python index.py /path/to/your/files
 ```
+
+The system will:
+- Automatically detect all text-based files by content analysis
+- Skip binary files and common build/cache directories
+- Prompt for trust_remote_code consent if needed for the embedding model
 
 Or specify embedding type:
 
 ```bash
-# Use local SentenceTransformer embeddings
-python index.py /path/to/logs --local-embeddings
+# Use local SentenceTransformer embeddings (default)
+python index.py /path/to/files --local-embeddings
 
 # Use Ollama embeddings
-python index.py /path/to/logs --ollama-embeddings
+python index.py /path/to/files --ollama-embeddings
 
 # Use remote embedding server
-python index.py /path/to/logs --remote-embeddings
+python index.py /path/to/files --remote-embeddings
 ```
 
 Additional options:
@@ -95,13 +100,18 @@ python index.py /path/to/logs --model custom-model --chunk-size 1500
 python index.py /path/to/logs --chroma-path ./my_custom_db
 ```
 
-### 4. Query Your Logs
+### 4. Query Your Indexed Content
 
 Start the interactive query interface:
 
 ```bash
 python ask.py
 ```
+
+The system will:
+- Auto-detect the embedding type used during indexing
+- Apply same trust_remote_code settings for consistency
+- Generate responses using Ollama's local LLM
 
 Or specify a custom output file:
 
@@ -114,22 +124,32 @@ python ask.py my_queries.md
 ### Core Components
 
 1. **Unified Indexer (`index.py`)**
-   - Processes repositories and creates vector embeddings
+   - Processes repositories with automatic file detection
    - Supports multiple embedding strategies via handler classes
-   - Chunks code into configurable segments (default: 2000 characters)
+   - Chunks content into configurable segments (default: 2000 characters)
+   - Client-side trust_remote_code management
    - Stores embeddings in ChromaDB with metadata tracking
 
 2. **Query Interface (`ask.py`)**  
-   - Interactive CLI for natural language log queries
-   - Auto-detects embedding type from metadata
+   - Interactive CLI for natural language queries
+   - Auto-detects embedding type and trust settings from metadata
    - Generates responses using Ollama's local LLM
+   - Consistent security model with indexing phase
    - Saves all Q&A pairs with timestamps
 
 3. **Embedding Server (`embedding_server.py`)**
    - Optional remote embedding service with GPU support
+   - Respects client-side trust_remote_code decisions
    - RESTful API with health checks and server info
-   - Configurable via command-line arguments
-   - Supports batch processing and model caching
+   - Dynamic model loading with trust setting caching
+   - Supports batch processing and multiple model variants
+
+4. **Trust Manager (`trust_manager.py`)**
+   - Centralized security management for trust_remote_code
+   - Auto-detection of models requiring remote code execution
+   - Interactive consent prompts with risk/benefit explanations
+   - Persistent approval tracking in .env files
+   - CLI tools for managing trust settings
 
 ### Embedding Handlers
 
@@ -184,12 +204,20 @@ Options:
 
 ## Security: Trust Remote Code Management
 
-The system includes built-in security management for models that require `trust_remote_code=True`. This feature:
+The system includes a comprehensive security framework for models that require `trust_remote_code=True`. This client-side security system:
 
-- **Auto-detects** which models likely need remote code execution
-- **Prompts for user consent** with clear risk warnings
-- **Saves decisions** in `.env` with model-specific tracking
-- **Re-prompts on model changes** for ongoing security
+- **Auto-detects** which models likely need remote code execution based on known patterns
+- **Prompts for informed consent** with detailed security warnings
+- **Persists decisions** in `.env` with model-specific hash tracking
+- **Client-side control** - trust decisions made locally, not on remote servers
+- **Cross-component consistency** - same security model for indexing, querying, and serving
+
+### How It Works
+
+1. **Detection**: System analyzes model names against known patterns
+2. **User Consent**: Interactive prompts with clear risk/benefit explanations  
+3. **Persistence**: Decisions saved locally with model identification hashes
+4. **Communication**: Client sends trust settings to remote embedding servers
 
 ### Managing Trust Settings
 
@@ -201,7 +229,9 @@ python trust_manager.py --list
 python trust_manager.py --check "nomic-ai/nomic-embed-text-v1.5"
 ```
 
-When you first use a model requiring remote code, you'll see:
+### Security Flow
+
+When you first use a model requiring remote code execution:
 
 ```
 ==============================================================
@@ -224,6 +254,19 @@ BENEFITS:
 Your choice will be saved for this model.
 ==============================================================
 Allow remote code execution for this model? [y/N]:
+```
+
+### Trust Settings Storage
+
+Approval decisions are stored in your `.env` file:
+
+```bash
+# Example entries (automatically managed)
+# TRUST_REMOTE_CODE_A1B2C3D4_MODEL=nomic-ai/nomic-embed-text-v1.5
+TRUST_REMOTE_CODE_A1B2C3D4=true
+
+# TRUST_REMOTE_CODE_E5F6G7H8_MODEL=sentence-transformers/all-MiniLM-L6-v2  
+TRUST_REMOTE_CODE_E5F6G7H8=false
 ```
 
 ## Advanced Usage
@@ -303,11 +346,14 @@ The system automatically detects and works with databases created by older versi
 ## Dependencies
 
 - **chromadb**: Vector database for embeddings
-- **sentence-transformers**: Local embedding generation
+- **sentence-transformers**: Local embedding generation (optional, only needed for local embeddings)
 - **ollama**: LLM client for local inference
 - **rich**: Enhanced terminal output and markdown rendering
 - **flask**: Web server for embedding API
 - **python-dotenv**: Environment configuration management
+- **tiktoken**: Token counting utilities
+- **einops**: Tensor operations for advanced models
+- **requests**: HTTP client for remote services
 
 ## File Structure
 

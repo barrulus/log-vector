@@ -31,7 +31,7 @@ load_dotenv()
 
 # Configuration from environment
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'dolphincoder:15b')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen3:8b')
 EMBEDDING_SERVER = os.getenv('EMBEDDING_SERVER', 'http://localhost:5000')
 EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'nomic-ai/nomic-embed-text-v1.5')
 CHROMA_PATH = os.getenv('CHROMA_PATH', './chroma_code')

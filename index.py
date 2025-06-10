@@ -47,7 +47,6 @@ USE_LOCAL_EMBEDDINGS = os.getenv('USE_LOCAL_EMBEDDINGS', 'true').lower() == 'tru
 USE_LOCAL_OLLAMA = os.getenv('USE_LOCAL_OLLAMA', 'true').lower() == 'true'
 
 # Constants
-SUPPORTED_EXTENSIONS = ['.py', '.log', '.js', '.ts', '.md', '.sql', '.html', '.csv']
 DEFAULT_CHUNK_SIZE = 2000
 OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
 
@@ -199,16 +198,55 @@ class RemoteEmbeddingHandler(EmbeddingHandler):
             return False
 
 
+def is_indexable_file(file_path: Path) -> bool:
+    """Determine if a file can be indexed by examining its content"""
+    try:
+        # Skip if file is too large (> 10MB)
+        if file_path.stat().st_size > 10 * 1024 * 1024:
+            return False
+            
+        with open(file_path, 'rb') as f:
+            # Read first 8KB to check content
+            chunk = f.read(8192)
+            if not chunk:
+                return False  # Empty file
+            
+            # Check for null bytes (indicates binary content)
+            if b'\x00' in chunk:
+                return False
+            
+            # Try to decode as text using common encodings
+            for encoding in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
+                try:
+                    chunk.decode(encoding)
+                    return True
+                except UnicodeDecodeError:
+                    continue
+            
+            return False
+                
+    except (IOError, OSError, PermissionError):
+        return False
+
+
 def collect_files(repo_path: Path) -> List[Path]:
-    """Collect all supported files from the repository"""
+    """Collect all indexable files from the repository by scanning content"""
     files: List[Path] = []
     
-    for ext in SUPPORTED_EXTENSIONS:
-        files.extend(list(repo_path.rglob(f"*{ext}")))
-    
     # Filter out common directories to ignore
-    ignore_dirs = {'.git', '__pycache__', 'node_modules', '.env', 'venv', 'env', '.venv'}
-    files = [f for f in files if not any(ignored in f.parts for ignored in ignore_dirs)]
+    ignore_dirs = {'.git', '__pycache__', 'node_modules', '.env', 'venv', 'env', '.venv', 
+                   'target', 'build', 'dist', '.svn', '.hg', '.idea', '.vscode'}
+    
+    # Recursively scan all files
+    for file_path in repo_path.rglob('*'):
+        if file_path.is_file():
+            # Skip files in ignored directories
+            if any(ignored in file_path.parts for ignored in ignore_dirs):
+                continue
+                
+            # Check if file is indexable by content
+            if is_indexable_file(file_path):
+                files.append(file_path)
     
     return sorted(files)
 
@@ -265,7 +303,18 @@ def process_repository(
         
         for file_path in files:
             try:
-                content = file_path.read_text(encoding='utf-8', errors='ignore')
+                # Try different encodings to read the file
+                content = None
+                for encoding in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
+                    try:
+                        content = file_path.read_text(encoding=encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                
+                if content is None:
+                    console.print(f"[yellow]Could not decode {file_path}, skipping[/yellow]")
+                    continue
                 chunks = chunk_code(content, chunk_size)
                 
                 for i, chunk in enumerate(chunks):

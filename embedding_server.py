@@ -33,6 +33,7 @@ app = Flask(__name__)
 model: Optional[SentenceTransformer] = None
 device: Optional[str] = None
 args: Optional[argparse.Namespace] = None
+model_cache: Dict[str, SentenceTransformer] = {}  # Cache models with different trust settings
 
 
 def initialize_model() -> None:
@@ -44,45 +45,83 @@ def initialize_model() -> None:
     
     print(f"\nLoading SentenceTransformer model: {args.model}")
     
-    # CUDA Diagnostics
-    print("\nCUDA Diagnostics:")
+    # GPU Acceleration Diagnostics
+    print("\nGPU Acceleration Diagnostics:")
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
+    
+    # Check for MPS (Apple Silicon GPU)
+    mps_available = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
+    print(f"MPS (Apple Silicon) available: {mps_available}")
     
     if torch.cuda.is_available():
         if hasattr(torch, 'version') and hasattr(torch.version, 'cuda') and torch.version.cuda:  # type: ignore[attr-defined]
             print(f"PyTorch CUDA version: {torch.version.cuda}")  # type: ignore[attr-defined]
-        print(f"Number of GPUs: {torch.cuda.device_count()}")
+        print(f"Number of CUDA GPUs: {torch.cuda.device_count()}")
         for i in range(torch.cuda.device_count()):
-            print(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            print(f"CUDA GPU {i}: {torch.cuda.get_device_name(i)}")
             props = cast(Any, torch.cuda.get_device_properties(i))  # type: ignore[misc]
-            print(f"GPU {i} Memory: {props.total_memory / 1024**3:.1f} GB")
+            print(f"CUDA GPU {i} Memory: {props.total_memory / 1024**3:.1f} GB")
         device = 'cuda'
+    elif mps_available:
+        print("Using Apple Silicon GPU (MPS) for acceleration")
+        device = 'mps'
     else:
-        print("CUDA not available. Reasons could be:")
-        print("1. NVIDIA GPU not present")
-        print("2. CUDA drivers not installed")
-        print("3. PyTorch not compiled with CUDA support")
-        print("4. Environment variables not set correctly")
+        print("No GPU acceleration available. Using CPU.")
+        print("Possible reasons:")
+        print("- No NVIDIA GPU (for CUDA)")
+        print("- No Apple Silicon chip (for MPS)")
+        print("- PyTorch not compiled with GPU support")
+        print("- Missing drivers or environment setup")
         device = 'cpu'
     
     print(f"\nUsing device: {device}")
     
-    # Load model
-    model = SentenceTransformer(args.model, device=device, trust_remote_code=True)
-    model.max_seq_length = args.max_length
+    # Determine trust setting for default model
+    if args.trust_remote_code:
+        default_trust = True
+        print(f"Using --trust-remote-code flag: trust_remote_code=True for {args.model}")
+    else:
+        from trust_manager import TrustManager
+        trust_manager = TrustManager()
+        default_trust = trust_manager.check_model_needs_trust(args.model)
+        print(f"Auto-detected trust_remote_code={default_trust} for {args.model}")
     
-    print(f"Model loaded successfully!")
+    # Load default model with appropriate trust setting
+    model = get_or_load_model(args.model, default_trust)
+    
+    print(f"Default model loaded: {args.model}")
     print(f"Max sequence length: {args.max_length}")
     print(f"Batch size: {args.batch_size}")
+    print(f"Note: Client requests can override model and trust settings")
+
+
+def get_or_load_model(model_name: str, trust_remote_code: bool) -> SentenceTransformer:
+    """Get or load a model with specific trust_remote_code setting"""
+    global model_cache, device, args
+    from sentence_transformers import SentenceTransformer
+    
+    if args is None:
+        raise RuntimeError("Server not initialized")
+    
+    # Create cache key
+    cache_key = f"{model_name}:trust={trust_remote_code}"
+    
+    if cache_key not in model_cache:
+        print(f"Loading model {model_name} with trust_remote_code={trust_remote_code}")
+        loaded_model = SentenceTransformer(model_name, device=device, trust_remote_code=trust_remote_code)
+        loaded_model.max_seq_length = args.max_length
+        model_cache[cache_key] = loaded_model
+    
+    return model_cache[cache_key]
 
 
 @app.route('/embed', methods=['POST'])
 def embed() -> Any:
     """Generate embeddings for provided texts"""
     try:
-        if model is None or args is None:
-            return jsonify({'error': 'Model not initialized'}), 500
+        if args is None:
+            return jsonify({'error': 'Server not initialized'}), 500
             
         data = request.json
         if data is None:
@@ -90,21 +129,17 @@ def embed() -> Any:
         data = cast(Dict[str, Any], data)
             
         texts = data.get('texts', [])
-        
-        # Allow model override per request
-        request_model = data.get('model')
-        if request_model and request_model != args.model:
-            # For now, we don't support dynamic model switching
-            # This could be implemented with a model cache
-            return jsonify({
-                'error': f'Model switching not supported. Server is using: {args.model}'
-            }), 400
+        request_model = data.get('model', args.model)
+        trust_remote_code = data.get('trust_remote_code', False)
         
         if not texts:
             return jsonify({'error': 'No texts provided'}), 400
         
+        # Get the appropriate model
+        model_to_use = get_or_load_model(request_model, trust_remote_code)
+        
         # Generate embeddings on GPU/CPU
-        embeddings_result = cast(Any, model.encode(  # type: ignore[misc]
+        embeddings_result = cast(Any, model_to_use.encode(  # type: ignore[misc]
             texts, 
             batch_size=args.batch_size, 
             show_progress_bar=False,
@@ -114,7 +149,8 @@ def embed() -> Any:
         
         return jsonify({
             'embeddings': embeddings,
-            'model': args.model,
+            'model': request_model,
+            'trust_remote_code': trust_remote_code,
             'count': len(embeddings)
         })
     
@@ -208,6 +244,11 @@ def main() -> None:
         '--debug',
         action='store_true',
         help='Run in debug mode'
+    )
+    parser.add_argument(
+        '--trust-remote-code',
+        action='store_true',
+        help='Force trust_remote_code=True for default model (auto-detected if not specified)'
     )
     
     args = parser.parse_args()

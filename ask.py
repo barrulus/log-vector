@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Interactive Code Query Tool
+Interactive Log File Query Tool
 
-Query your indexed codebase using natural language and get AI-generated answers.
+Query your indexed log files using natural language and get AI-generated answers.
 Uses the embeddings created by index.py and generates responses using Ollama.
 
 Usage:
     python ask.py [output_file.md]
 
 Arguments:
-    output_file.md    Optional. Markdown file to save Q&A pairs (default: codebase_queries.md)
+    output_file.md    Optional. Markdown file to save Q&A pairs (default: logfile_queries.md)
 """
 
 import os
@@ -31,7 +31,7 @@ load_dotenv()
 
 # Configuration from environment
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'dolphincoder:15b')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen3:8b')
 EMBEDDING_SERVER = os.getenv('EMBEDDING_SERVER', 'http://localhost:5000')
 EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'nomic-ai/nomic-embed-text-v1.5')
 CHROMA_PATH = os.getenv('CHROMA_PATH', './chroma_code')
@@ -39,7 +39,7 @@ USE_LOCAL_EMBEDDINGS = os.getenv('USE_LOCAL_EMBEDDINGS', 'true').lower() == 'tru
 USE_LOCAL_OLLAMA = os.getenv('USE_LOCAL_OLLAMA', 'true').lower() == 'true'
 
 # Constants
-DEFAULT_OUTPUT_FILE = "codebase_queries.md"
+DEFAULT_OUTPUT_FILE = "logfile_queries.md"
 DEFAULT_TOP_K = 5
 OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
 
@@ -164,14 +164,13 @@ class QueryHandler:
     def _get_embedding_local(self, text: str) -> List[float]:
         """Get embedding using local model"""
         try:
-            from sentence_transformers import SentenceTransformer
-            
             if not self._local_model:
                 console.print("[yellow]Loading local embedding model...[/yellow]")
-                self._local_model = SentenceTransformer(self.embedding_model)
-                self._local_model.max_seq_length = 512
+                from trust_manager import safe_sentence_transformer_load  # type: ignore[import]
+                self._local_model = safe_sentence_transformer_load(self.embedding_model)
+                self._local_model.max_seq_length = 512  # type: ignore[attr-defined]
             
-            embedding = self._local_model.encode([text], show_progress_bar=False)
+            embedding = self._local_model.encode([text], show_progress_bar=False)  # type: ignore[attr-defined]
             # Handle different return types from encode
             if hasattr(embedding, 'tolist'):
                 # If it's a numpy array
@@ -198,9 +197,18 @@ class QueryHandler:
     def _get_embedding_remote(self, text: str) -> List[float]:
         """Get embedding from remote server"""
         try:
+            # Get trust setting for this model
+            from trust_manager import TrustManager
+            trust_manager = TrustManager()
+            trust_remote_code = trust_manager.get_trust_setting(self.embedding_model, interactive=True)
+            
             response = requests.post(
                 f"{EMBEDDING_SERVER}/embed",
-                json={"texts": [text], "model": self.embedding_model},
+                json={
+                    "texts": [text], 
+                    "model": self.embedding_model,
+                    "trust_remote_code": trust_remote_code
+                },
                 timeout=60
             )
             response.raise_for_status()
@@ -210,7 +218,7 @@ class QueryHandler:
             raise
     
     def query_codebase(self, question: str, top_k: int = DEFAULT_TOP_K) -> str:
-        """Query the codebase and generate a response"""
+        """Query the logs and generate a response"""
         # Get embedding for the question
         try:
             q_embed = self.get_embedding(question)
@@ -285,8 +293,8 @@ def write_to_markdown(question: str, answer: str, filename: str) -> None:
     # Create the file if it doesn't exist
     if not os.path.exists(filename):
         with open(filename, "w", encoding="utf-8") as f:
-            f.write("# Codebase Query Log\n\n")
-            f.write("This file contains questions and answers about the codebase.\n\n")
+            f.write("# Log File Query Log\n\n")
+            f.write("This file contains questions and answers about the Log Files.\n\n")
     
     # Append the Q&A pair
     with open(filename, "a", encoding="utf-8") as f:
@@ -305,7 +313,7 @@ def main() -> None:
     
     output_file = sys.argv[1] if len(sys.argv) == 2 else DEFAULT_OUTPUT_FILE
     
-    console.print(f"\n[bold cyan]Code Query Tool[/bold cyan]")
+    console.print(f"\n[bold cyan]Log Query Tool[/bold cyan]")
     console.print(f"Output file: [cyan]{output_file}[/cyan]")
     console.print(f"Ollama model: [cyan]{OLLAMA_MODEL}[/cyan]")
     console.print("\nType 'exit' or 'quit' to stop.\n")
@@ -320,7 +328,7 @@ def main() -> None:
     # Interactive loop
     while True:
         try:
-            question = input("\n[?] Ask a question about the codebase: ")
+            question = input("\n[?] Ask a question about the log files: ")
             
             if question.lower() in ['exit', 'quit', 'q']:
                 console.print(f"\n[green]✓ All responses saved to {output_file}[/green]")
@@ -330,7 +338,7 @@ def main() -> None:
                 continue
             
             # Generate answer
-            console.print("\n[yellow]Searching codebase and generating response...[/yellow]")
+            console.print("\n[yellow]Searching log files and generating response...[/yellow]")
             answer = handler.query_codebase(question)
             
             # Write to file

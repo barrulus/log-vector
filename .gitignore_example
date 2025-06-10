@@ -1,0 +1,7 @@
+.gitignore
+venv/
+.vscode/
+__pycache__/
+chroma_code/
+chroma_db/
+*-queries.md

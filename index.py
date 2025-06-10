@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Unified Code Indexer with Multiple Embedding Options
+Unified Log File Indexer with Multiple Embedding Options
 
-This script indexes a codebase for semantic search using various embedding strategies:
+This script indexes a path of log files for semantic search using various embedding strategies:
 - Local embeddings using SentenceTransformer
 - Ollama embeddings using Ollama's API
 - Remote embeddings using a dedicated embedding server
@@ -15,7 +15,7 @@ Options:
     --ollama-embeddings   Use Ollama's embedding API
     --remote-embeddings   Use remote embedding server
     --model MODEL         Specify embedding model (overrides .env)
-    --chunk-size SIZE     Size of code chunks (default: 2000)
+    --chunk-size SIZE     Size of log chunks (default: 2000)
 """
 
 import os
@@ -39,7 +39,7 @@ load_dotenv()
 
 # Configuration from environment
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
-OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'dolphincoder:15b')
+OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen3:8b')
 EMBEDDING_SERVER = os.getenv('EMBEDDING_SERVER', 'http://localhost:5000')
 EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'nomic-ai/nomic-embed-text-v1.5')
 CHROMA_PATH = os.getenv('CHROMA_PATH', './chroma_code')
@@ -47,7 +47,6 @@ USE_LOCAL_EMBEDDINGS = os.getenv('USE_LOCAL_EMBEDDINGS', 'true').lower() == 'tru
 USE_LOCAL_OLLAMA = os.getenv('USE_LOCAL_OLLAMA', 'true').lower() == 'true'
 
 # Constants
-SUPPORTED_EXTENSIONS = ['.py', '.log', '.js', '.ts', '.md', '.sql', '.html', '.csv']
 DEFAULT_CHUNK_SIZE = 2000
 OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
 
@@ -60,7 +59,7 @@ class EmbeddingHandler:
     def __init__(self, model: Optional[str] = None):
         self.model: str = model or EMBEDDING_MODEL
         
-    def embed(self, texts: List[str]) -> List[List[float]]:
+    def embed(self, _texts: List[str]) -> List[List[float]]:
         """Generate embeddings for a list of texts"""
         raise NotImplementedError
         
@@ -77,21 +76,26 @@ class LocalEmbeddingHandler(EmbeddingHandler):
         self.transformer: Optional[Any] = None
         self.device: str = 'cpu'
         try:
-            from sentence_transformers import SentenceTransformer
             import torch
             
-            # Check for CUDA availability
+            # Check for GPU acceleration
             if torch.cuda.is_available():
                 console.print(f"[green]✓ CUDA available: {torch.cuda.get_device_name(0)}[/green]")
                 self.device = 'cuda'
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                console.print("[green]✓ Apple Silicon GPU (MPS) available[/green]")
+                self.device = 'mps'
             else:
-                console.print("[yellow]! CUDA not available, using CPU[/yellow]")
+                console.print("[yellow]! No GPU acceleration available, using CPU[/yellow]")
                 self.device = 'cpu'
                 
-            self.transformer = SentenceTransformer(self.model, device=self.device)
-            self.transformer.max_seq_length = 512
+            from trust_manager import safe_sentence_transformer_load  # type: ignore[import]
+            self.transformer = safe_sentence_transformer_load(self.model, device=self.device)
+            self.transformer.max_seq_length = 512  # type: ignore[attr-defined]
         except ImportError:
             raise ImportError("sentence-transformers not installed. Run: pip install sentence-transformers")
+        except Exception as e:
+            raise RuntimeError(f"Failed to load embedding model: {e}")
     
     def embed(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using local model"""
@@ -164,6 +168,13 @@ class RemoteEmbeddingHandler(EmbeddingHandler):
         self.base_url: str = EMBEDDING_SERVER
         self.max_retries: int = 3
         self.retry_delay: int = 1
+        self.trust_remote_code: bool = self._get_trust_setting()
+    
+    def _get_trust_setting(self) -> bool:
+        """Get trust_remote_code setting for this model"""
+        from trust_manager import TrustManager
+        trust_manager = TrustManager()
+        return trust_manager.get_trust_setting(self.model, interactive=True)
         
     def embed(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using remote server with retry logic"""
@@ -171,7 +182,11 @@ class RemoteEmbeddingHandler(EmbeddingHandler):
             try:
                 response = requests.post(
                     f"{self.base_url}/embed",
-                    json={"texts": texts, "model": self.model},
+                    json={
+                        "texts": texts, 
+                        "model": self.model,
+                        "trust_remote_code": self.trust_remote_code
+                    },
                     timeout=60
                 )
                 response.raise_for_status()
@@ -199,22 +214,61 @@ class RemoteEmbeddingHandler(EmbeddingHandler):
             return False
 
 
+def is_indexable_file(file_path: Path) -> bool:
+    """Determine if a file can be indexed by examining its content"""
+    try:
+        # Skip if file is too large (> 100MB)
+        if file_path.stat().st_size > 100 * 1024 * 1024:
+            return False
+            
+        with open(file_path, 'rb') as f:
+            # Read first 8KB to check content
+            chunk = f.read(8192)
+            if not chunk:
+                return False  # Empty file
+            
+            # Check for null bytes (indicates binary content)
+            if b'\x00' in chunk:
+                return False
+            
+            # Try to decode as text using common encodings
+            for encoding in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
+                try:
+                    chunk.decode(encoding)
+                    return True
+                except UnicodeDecodeError:
+                    continue
+            
+            return False
+                
+    except (IOError, OSError, PermissionError):
+        return False
+
+
 def collect_files(repo_path: Path) -> List[Path]:
-    """Collect all supported files from the repository"""
+    """Collect all indexable files from the repository by scanning content"""
     files: List[Path] = []
     
-    for ext in SUPPORTED_EXTENSIONS:
-        files.extend(list(repo_path.rglob(f"*{ext}")))
-    
     # Filter out common directories to ignore
-    ignore_dirs = {'.git', '__pycache__', 'node_modules', '.env', 'venv', 'env', '.venv'}
-    files = [f for f in files if not any(ignored in f.parts for ignored in ignore_dirs)]
+    ignore_dirs = {'.git', '__pycache__', 'node_modules', '.env', 'venv', 'env', '.venv', 
+                   'target', 'build', 'dist', '.svn', '.hg', '.idea', '.vscode'}
+    
+    # Recursively scan all files
+    for file_path in repo_path.rglob('*'):
+        if file_path.is_file():
+            # Skip files in ignored directories
+            if any(ignored in file_path.parts for ignored in ignore_dirs):
+                continue
+                
+            # Check if file is indexable by content
+            if is_indexable_file(file_path):
+                files.append(file_path)
     
     return sorted(files)
 
 
 def chunk_code(content: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> List[str]:
-    """Split code into chunks"""
+    """Split logs into chunks"""
     chunks: List[str] = []
     lines = content.split('\n')
     current_chunk: List[str] = []
@@ -265,7 +319,18 @@ def process_repository(
         
         for file_path in files:
             try:
-                content = file_path.read_text(encoding='utf-8', errors='ignore')
+                # Try different encodings to read the file
+                content = None
+                for encoding in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
+                    try:
+                        content = file_path.read_text(encoding=encoding)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                
+                if content is None:
+                    console.print(f"[yellow]Could not decode {file_path}, skipping[/yellow]")
+                    continue
                 chunks = chunk_code(content, chunk_size)
                 
                 for i, chunk in enumerate(chunks):
@@ -380,7 +445,7 @@ def save_metadata(repo_path: Path, embedding_type: str, model: str, chunk_size: 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Index a codebase for semantic search",
+        description="Index log files for semantic search",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -416,7 +481,7 @@ def main() -> None:
         '--chunk-size', 
         type=int, 
         default=DEFAULT_CHUNK_SIZE,
-        help=f'Size of code chunks (default: {DEFAULT_CHUNK_SIZE})'
+        help=f'Size of log file chunks (default: {DEFAULT_CHUNK_SIZE})'
     )
     parser.add_argument(
         '--chroma-path',
@@ -436,7 +501,7 @@ def main() -> None:
         console.print(f"[red]Error: Repository path does not exist: {repo_path}[/red]")
         sys.exit(1)
     
-    console.print(f"\n[bold cyan]Code Indexer[/bold cyan]")
+    console.print(f"\n[bold cyan]Log Indexer[/bold cyan]")
     console.print(f"Repository: {repo_path}")
     
     # Determine embedding type

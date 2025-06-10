@@ -164,15 +164,13 @@ class QueryHandler:
     def _get_embedding_local(self, text: str) -> List[float]:
         """Get embedding using local model"""
         try:
-            from sentence_transformers import SentenceTransformer
-            
             if not self._local_model:
                 console.print("[yellow]Loading local embedding model...[/yellow]")
-                from trust_manager import safe_sentence_transformer_load
+                from trust_manager import safe_sentence_transformer_load  # type: ignore[import]
                 self._local_model = safe_sentence_transformer_load(self.embedding_model)
-                self._local_model.max_seq_length = 512
+                self._local_model.max_seq_length = 512  # type: ignore[attr-defined]
             
-            embedding = self._local_model.encode([text], show_progress_bar=False)
+            embedding = self._local_model.encode([text], show_progress_bar=False)  # type: ignore[attr-defined]
             # Handle different return types from encode
             if hasattr(embedding, 'tolist'):
                 # If it's a numpy array

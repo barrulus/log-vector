@@ -7,10 +7,11 @@ Saves approval state in .env with model tracking for security.
 """
 
 import os
-import sys
-from typing import Optional, Dict, Any
-from pathlib import Path
-from dotenv import load_dotenv, set_key
+from typing import Optional, TYPE_CHECKING
+from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 # Load environment variables
 load_dotenv()
@@ -45,7 +46,7 @@ class TrustManager:
             return None
         return value.lower() == 'true'
     
-    def _set_model_approval(self, model_name: str, approved: bool) -> None:
+    def set_model_approval(self, model_name: str, approved: bool) -> None:
         """Save model approval to .env file"""
         key = self._model_to_key(model_name)
         value = 'true' if approved else 'false'
@@ -54,13 +55,13 @@ class TrustManager:
         comment_key = f"# {key}_MODEL"
         
         # Read existing content
-        env_content = []
+        env_content: list[str] = []
         if os.path.exists(self.env_file):
             with open(self.env_file, 'r') as f:
                 env_content = f.readlines()
         
         # Remove existing entries for this model
-        filtered_content = []
+        filtered_content: list[str] = []
         skip_next = False
         for line in env_content:
             if skip_next:
@@ -83,7 +84,7 @@ class TrustManager:
         # Reload environment
         load_dotenv(override=True)
     
-    def _check_model_needs_trust(self, model_name: str) -> bool:
+    def check_model_needs_trust(self, model_name: str) -> bool:
         """
         Auto-detect if a model requires trust_remote_code.
         This is a heuristic based on known model patterns.
@@ -118,7 +119,7 @@ class TrustManager:
         # For unknown models, assume trust might be needed
         return True
     
-    def _prompt_user_consent(self, model_name: str) -> bool:
+    def prompt_user_consent(self, model_name: str) -> bool:
         """Prompt user for consent to use trust_remote_code"""
         print(f"\n{'='*60}")
         print("SECURITY WARNING: Remote Code Execution")
@@ -170,16 +171,16 @@ class TrustManager:
             return approval
         
         # Check if model needs trust_remote_code
-        needs_trust = self._check_model_needs_trust(model_name)
+        needs_trust = self.check_model_needs_trust(model_name)
         if not needs_trust:
             # Model is known safe, save this decision
-            self._set_model_approval(model_name, False)
+            self.set_model_approval(model_name, False)
             return False
         
         # Model might need trust, prompt user if interactive
         if interactive:
-            user_approved = self._prompt_user_consent(model_name)
-            self._set_model_approval(model_name, user_approved)
+            user_approved = self.prompt_user_consent(model_name)
+            self.set_model_approval(model_name, user_approved)
             return user_approved
         else:
             # Non-interactive mode, default to False for security
@@ -187,9 +188,9 @@ class TrustManager:
             print("Defaulting to False for security. Use interactive mode to approve.")
             return False
     
-    def list_approved_models(self) -> Dict[str, bool]:
+    def list_approved_models(self) -> dict[str, bool]:
         """List all models and their approval status"""
-        approved_models = {}
+        approved_models: dict[str, bool] = {}
         
         # Read .env file and find trust settings
         if os.path.exists(self.env_file):
@@ -215,7 +216,7 @@ class TrustManager:
         return approved_models
 
 
-def safe_sentence_transformer_load(model_name: str, interactive: bool = True, **kwargs) -> Any:
+def safe_sentence_transformer_load(model_name: str, interactive: bool = True, **kwargs: object) -> 'SentenceTransformer':
     """
     Safely load a SentenceTransformer with trust_remote_code consent management.
     
@@ -233,22 +234,23 @@ def safe_sentence_transformer_load(model_name: str, interactive: bool = True, **
     trust_setting = trust_manager.get_trust_setting(model_name, interactive)
     
     # Remove any existing trust_remote_code setting from kwargs
-    kwargs.pop('trust_remote_code', None)
+    kwargs_dict = dict(kwargs)
+    kwargs_dict.pop('trust_remote_code', None)
     
     if trust_setting:
         print(f"Loading {model_name} with trust_remote_code=True (user approved)")
-        return SentenceTransformer(model_name, trust_remote_code=True, **kwargs)
+        return SentenceTransformer(model_name, trust_remote_code=True, **kwargs_dict)  # type: ignore[misc]
     else:
         print(f"Loading {model_name} with trust_remote_code=False")
         try:
-            return SentenceTransformer(model_name, trust_remote_code=False, **kwargs)
+            return SentenceTransformer(model_name, trust_remote_code=False, **kwargs_dict)  # type: ignore[misc]
         except Exception as e:
             print(f"Error loading model with trust_remote_code=False: {e}")
             if interactive:
                 print("Model may require trust_remote_code=True. Would you like to try again with remote code enabled?")
-                if trust_manager._prompt_user_consent(model_name):
-                    trust_manager._set_model_approval(model_name, True)
-                    return SentenceTransformer(model_name, trust_remote_code=True, **kwargs)
+                if trust_manager.prompt_user_consent(model_name):
+                    trust_manager.set_model_approval(model_name, True)
+                    return SentenceTransformer(model_name, trust_remote_code=True, **kwargs_dict)  # type: ignore[misc]
             raise
 
 
@@ -275,7 +277,7 @@ if __name__ == "__main__":
             print("No models have been evaluated yet.")
     
     elif args.check:
-        needs_trust = trust_manager._check_model_needs_trust(args.check)
+        needs_trust = trust_manager.check_model_needs_trust(args.check)
         print(f"Model {args.check} {'likely needs' if needs_trust else 'probably does not need'} trust_remote_code")
     
     else:

@@ -59,7 +59,7 @@ class EmbeddingHandler:
     def __init__(self, model: Optional[str] = None):
         self.model: str = model or EMBEDDING_MODEL
         
-    def embed(self, texts: List[str]) -> List[List[float]]:
+    def embed(self, _texts: List[str]) -> List[List[float]]:
         """Generate embeddings for a list of texts"""
         raise NotImplementedError
         
@@ -76,7 +76,6 @@ class LocalEmbeddingHandler(EmbeddingHandler):
         self.transformer: Optional[Any] = None
         self.device: str = 'cpu'
         try:
-            from sentence_transformers import SentenceTransformer
             import torch
             
             # Check for CUDA availability
@@ -87,11 +86,13 @@ class LocalEmbeddingHandler(EmbeddingHandler):
                 console.print("[yellow]! CUDA not available, using CPU[/yellow]")
                 self.device = 'cpu'
                 
-            from trust_manager import safe_sentence_transformer_load
+            from trust_manager import safe_sentence_transformer_load  # type: ignore[import]
             self.transformer = safe_sentence_transformer_load(self.model, device=self.device)
-            self.transformer.max_seq_length = 512
+            self.transformer.max_seq_length = 512  # type: ignore[attr-defined]
         except ImportError:
             raise ImportError("sentence-transformers not installed. Run: pip install sentence-transformers")
+        except Exception as e:
+            raise RuntimeError(f"Failed to load embedding model: {e}")
     
     def embed(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings using local model"""

@@ -42,7 +42,7 @@ pip install -r requirements.txt
 Copy the example environment file and customize it:
 
 ```bash
-cp .env_example .env
+cp .env.example .env
 ```
 
 Edit `.env` to configure your setup:
@@ -114,6 +114,7 @@ The system will:
 - Auto-detect the embedding type used during indexing
 - Apply same trust_remote_code settings for consistency
 - Generate responses using Ollama's local LLM
+- Generate an output file ask-YYYY-Month-DD-HH-MM.md
 
 Or specify a custom output file:
 
@@ -137,7 +138,7 @@ python ask.py my_queries.md
    - Auto-detects embedding type and trust settings from metadata
    - Generates responses using Ollama's local LLM
    - Consistent security model with indexing phase
-   - Saves all Q&A pairs with timestamps
+   - Saves all Q&A pairs with timestamps as markdown files
 
 3. **Embedding Server (`embedding_server.py`)**
    - Optional remote embedding service with GPU support

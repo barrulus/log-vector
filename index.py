@@ -34,21 +34,21 @@ from chromadb.config import Settings
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeRemainingColumn
 
+import pypdf
+
 # Load environment variables
 load_dotenv()
 
 # Configuration from environment
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen3:8b')
+OLLAMA_EMBEDDING_MODEL = os.getenv('OLLAMA_EMBEDDING_MODEL', 'nomic-embed-text:latest')
 EMBEDDING_SERVER = os.getenv('EMBEDDING_SERVER', 'http://localhost:5000')
 EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'nomic-ai/nomic-embed-text-v1.5')
-CHROMA_PATH = os.getenv('CHROMA_PATH', './chroma_code')
+CHROMA_PATH = os.getenv('CHROMA_PATH', './chroma_db')
+DEFAULT_CHUNK_SIZE = int(os.getenv('DEFAULT_CHUNK_SIZE', '2000'))
 USE_LOCAL_EMBEDDINGS = os.getenv('USE_LOCAL_EMBEDDINGS', 'true').lower() == 'true'
 USE_LOCAL_OLLAMA = os.getenv('USE_LOCAL_OLLAMA', 'true').lower() == 'true'
-
-# Constants
-DEFAULT_CHUNK_SIZE = 2000
-OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
 
 console = Console()
 
@@ -59,8 +59,9 @@ class EmbeddingHandler:
     def __init__(self, model: Optional[str] = None):
         self.model: str = model or EMBEDDING_MODEL
         
-    def embed(self, _texts: List[str]) -> List[List[float]]:
+    def embed(self, texts: List[str]) -> List[List[float]]:
         """Generate embeddings for a list of texts"""
+        _ = texts  # Base class method, implementation in subclasses
         raise NotImplementedError
         
     def check_availability(self) -> bool:
@@ -220,6 +221,10 @@ def is_indexable_file(file_path: Path) -> bool:
         # Skip if file is too large (> 100MB)
         if file_path.stat().st_size > 100 * 1024 * 1024:
             return False
+        
+        # Check if it's a PDF file
+        if file_path.suffix.lower() == '.pdf':
+            return True
             
         with open(file_path, 'rb') as f:
             # Read first 8KB to check content
@@ -265,6 +270,29 @@ def collect_files(repo_path: Path) -> List[Path]:
                 files.append(file_path)
     
     return sorted(files)
+
+
+def extract_pdf_text(file_path: Path) -> Optional[str]:
+    """Extract text content from PDF file"""
+    try:
+        with open(file_path, 'rb') as file:
+            pdf_reader = pypdf.PdfReader(file)
+            text_content: List[str] = []
+            
+            for page in pdf_reader.pages:
+                try:
+                    text = page.extract_text()
+                    if text.strip():
+                        text_content.append(text)
+                except Exception as e:
+                    console.print(f"[yellow]Error extracting page from {file_path}: {e}[/yellow]")
+                    continue
+            
+            return '\n\n'.join(text_content) if text_content else None
+            
+    except Exception as e:
+        console.print(f"[yellow]Error reading PDF {file_path}: {e}[/yellow]")
+        return None
 
 
 def chunk_code(content: str, chunk_size: int = DEFAULT_CHUNK_SIZE) -> List[str]:
@@ -319,18 +347,25 @@ def process_repository(
         
         for file_path in files:
             try:
-                # Try different encodings to read the file
-                content = None
-                for encoding in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
-                    try:
-                        content = file_path.read_text(encoding=encoding)
-                        break
-                    except UnicodeDecodeError:
+                # Handle PDF files differently
+                if file_path.suffix.lower() == '.pdf':
+                    content = extract_pdf_text(file_path)
+                    if content is None:
+                        console.print(f"[yellow]Could not extract text from PDF {file_path}, skipping[/yellow]")
                         continue
-                
-                if content is None:
-                    console.print(f"[yellow]Could not decode {file_path}, skipping[/yellow]")
-                    continue
+                else:
+                    # Try different encodings to read the file
+                    content = None
+                    for encoding in ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']:
+                        try:
+                            content = file_path.read_text(encoding=encoding)
+                            break
+                        except UnicodeDecodeError:
+                            continue
+                    
+                    if content is None:
+                        console.print(f"[yellow]Could not decode {file_path}, skipping[/yellow]")
+                        continue
                 chunks = chunk_code(content, chunk_size)
                 
                 for i, chunk in enumerate(chunks):
@@ -389,13 +424,13 @@ def save_to_chromadb(
     
     # Delete existing collection if it exists
     try:
-        client.delete_collection(name="code")
+        client.delete_collection(name="vectors")
     except Exception:
         pass
     
     # Create new collection
     collection = client.create_collection(
-        name="code",
+        name="vectors",
         metadata={"hnsw:space": "cosine"}
     )
     

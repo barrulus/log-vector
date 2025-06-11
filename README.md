@@ -51,13 +51,15 @@ Edit `.env` to configure your setup:
 # Ollama Configuration
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=dolphincoder:15b
+OLLAMA_EMBEDDING_MODEL=nomic-embed-text:latest
 
 # Embedding Configuration  
 EMBEDDING_SERVER=http://localhost:5000
 EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
 
-# ChromaDB Configuration
-CHROMA_PATH=./chroma_code
+# Storage Configuration
+CHROMA_PATH=./chroma_db
+DEFAULT_CHUNK_SIZE=2000
 
 # Default Settings
 USE_LOCAL_EMBEDDINGS=true
@@ -126,9 +128,9 @@ python ask.py my_queries.md
 1. **Unified Indexer (`index.py`)**
    - Processes repositories with automatic file detection
    - Supports multiple embedding strategies via handler classes
-   - Chunks content into configurable segments (default: 2000 characters)
+   - Chunks content into configurable segments (configured via DEFAULT_CHUNK_SIZE)
    - Client-side trust_remote_code management
-   - Stores embeddings in ChromaDB with metadata tracking
+   - Stores embeddings in ChromaDB (collection: 'vectors') with metadata tracking
 
 2. **Query Interface (`ask.py`)**  
    - Interactive CLI for natural language queries
@@ -165,9 +167,13 @@ python ask.py my_queries.md
 |----------|-------------|---------|
 | `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
 | `OLLAMA_MODEL` | LLM model for responses | `dolphincoder:15b` |
+| `OLLAMA_EMBEDDING_MODEL` | Ollama embedding model | `nomic-embed-text:latest` |
 | `EMBEDDING_SERVER` | Remote embedding server URL | `http://localhost:5000` |
 | `EMBEDDING_MODEL` | Embedding model name | `nomic-ai/nomic-embed-text-v1.5` |
-| `CHROMA_PATH` | ChromaDB storage path | `./chroma_code` |
+| `CHROMA_PATH` | ChromaDB storage path | `./chroma_db` |
+| `DEFAULT_CHUNK_SIZE` | Default text chunk size | `2000` |
+| `DEFAULT_OUTPUT_FILE_PREFIX` | Prefix for auto-generated output files | `ask` |
+| `DEFAULT_TOP_K` | Default number of results to retrieve | `5` |
 | `USE_LOCAL_EMBEDDINGS` | Default embedding strategy | `true` |
 | `USE_LOCAL_OLLAMA` | Use local Ollama instance | `true` |
 | `TRUST_REMOTE_CODE_*` | Model-specific trust settings | Auto-managed |
@@ -184,7 +190,7 @@ Options:
   --ollama-embeddings    Use Ollama embedding API  
   --remote-embeddings    Use remote embedding server
   --model MODEL          Override embedding model
-  --chunk-size SIZE      Text chunk size (default: 2000)
+  --chunk-size SIZE      Text chunk size (default from DEFAULT_CHUNK_SIZE env var)
   --chroma-path PATH     ChromaDB storage path
 ```
 
@@ -338,10 +344,10 @@ curl -X POST http://localhost:5000/embed \
 
 ### Backward Compatibility
 
-The system automatically detects and works with databases created by older versions:
-- Checks multiple ChromaDB paths (`./chroma_ollama`, `./chroma_code_optimized`, etc.)
-- Supports both "code" and "logs" collection names
-- Gracefully handles missing metadata files
+The system uses a single standardized configuration:
+- Database path: `./chroma_db` (configurable via CHROMA_PATH)
+- Collection name: `vectors`
+- Metadata tracking for indexing configuration
 
 ## Dependencies
 
@@ -364,7 +370,7 @@ The system automatically detects and works with databases created by older versi
 ├── trust_manager.py      # Security: trust_remote_code management
 ├── requirements.txt      # Python dependencies
 ├── .env_example         # Environment configuration template
-└── chroma_code/         # Default ChromaDB storage (created after indexing)
+└── chroma_db/           # Default ChromaDB storage (created after indexing)
 ```
 
 ## License

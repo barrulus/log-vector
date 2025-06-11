@@ -9,7 +9,7 @@ Usage:
     python ask.py [output_file.md]
 
 Arguments:
-    output_file.md    Optional. Markdown file to save Q&A pairs (default: logfile_queries.md)
+    output_file.md    Optional. Markdown file to save Q&A pairs (default: ask-YYYY-Month-DD-HH-MM.md)
 """
 
 import os
@@ -32,16 +32,20 @@ load_dotenv()
 # Configuration from environment
 OLLAMA_HOST = os.getenv('OLLAMA_HOST', 'http://localhost:11434')
 OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'qwen3:8b')
+OLLAMA_EMBEDDING_MODEL = os.getenv('OLLAMA_EMBEDDING_MODEL', 'nomic-embed-text:latest')
 EMBEDDING_SERVER = os.getenv('EMBEDDING_SERVER', 'http://localhost:5000')
 EMBEDDING_MODEL = os.getenv('EMBEDDING_MODEL', 'nomic-ai/nomic-embed-text-v1.5')
-CHROMA_PATH = os.getenv('CHROMA_PATH', './chroma_code')
+CHROMA_PATH = os.getenv('CHROMA_PATH', './chroma_db')
 USE_LOCAL_EMBEDDINGS = os.getenv('USE_LOCAL_EMBEDDINGS', 'true').lower() == 'true'
 USE_LOCAL_OLLAMA = os.getenv('USE_LOCAL_OLLAMA', 'true').lower() == 'true'
+DEFAULT_OUTPUT_FILE_PREFIX = os.getenv('DEFAULT_OUTPUT_FILE_PREFIX', 'ask')
+DEFAULT_TOP_K = int(os.getenv('DEFAULT_TOP_K', '5'))
 
-# Constants
-DEFAULT_OUTPUT_FILE = "logfile_queries.md"
-DEFAULT_TOP_K = 5
-OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
+# Generate default output filename with timestamp
+def get_default_output_file() -> str:
+    """Generate a timestamp-based output filename"""
+    timestamp = datetime.now().strftime("%Y-%B-%d-%H-%M")
+    return f"{DEFAULT_OUTPUT_FILE_PREFIX}-{timestamp}.md"
 
 # Initialize console
 console = Console()
@@ -61,82 +65,46 @@ class QueryHandler:
         
     def _load_database(self) -> None:
         """Load ChromaDB collection"""
-        # Try to load from configured path first
-        db_paths = [CHROMA_PATH]
+        db_path = CHROMA_PATH
         
-        # Add fallback paths for backward compatibility
-        fallback_paths = [
-            "./chroma_ollama",
-            "./chroma_code_optimized", 
-            "./chroma_db",
-            "./chroma_code"
-        ]
-        
-        for path in fallback_paths:
-            if path not in db_paths:
-                db_paths.append(path)
-        
-        for db_path in db_paths:
-            if os.path.exists(db_path):
-                try:
-                    client = chromadb.PersistentClient(path=db_path)
-                    # Try different collection names
-                    for collection_name in ["code", "logs"]:
-                        try:
-                            self.collection = client.get_collection(collection_name)
-                            console.print(f"[green]✓ Using database at: {db_path}[/green]")
-                            console.print(f"[green]✓ Collection: {collection_name}[/green]")
-                            return
-                        except Exception:
-                            continue
-                except Exception:
-                    continue
+        if os.path.exists(db_path):
+            try:
+                client = chromadb.PersistentClient(path=db_path)
+                self.collection = client.get_collection("vectors")
+                console.print(f"[green]✓ Using database at: {db_path}[/green]")
+                console.print(f"[green]✓ Collection: vectors[/green]")
+                return
+            except Exception as e:
+                console.print(f"[red]Error loading collection 'vectors': {e}[/red]")
         
         raise Exception(
-            f"No indexed database found. Please run: python index.py /path/to/repository"
+            f"No indexed database found at {db_path}. Please run: python index.py /path/to/repository"
         )
     
     def _load_metadata(self) -> None:
-        """Load indexing metadata if available"""
+        """Load indexing metadata to determine embedding type"""
         metadata_path = Path(CHROMA_PATH) / "index_metadata.json"
         
         if metadata_path.exists():
             try:
                 with open(metadata_path, 'r') as f:
                     metadata = json.load(f)
-                    self.embedding_type = metadata.get('embedding_type', 'unknown')
+                    self.embedding_type = metadata.get('embedding_type')
                     self.embedding_model = metadata.get('embedding_model', EMBEDDING_MODEL)
+                    
+                    if not self.embedding_type:
+                        raise ValueError("Missing embedding_type in metadata")
+                    
                     console.print(f"[cyan]Embedding type: {self.embedding_type}[/cyan]")
                     console.print(f"[cyan]Embedding model: {self.embedding_model}[/cyan]")
-            except Exception:
-                self._guess_embedding_type()
+            except Exception as e:
+                console.print(f"[red]Error loading metadata: {e}[/red]")
+                console.print("[red]Please re-index your repository with: python index.py /path/to/repository[/red]")
+                raise Exception("Invalid or missing metadata. Re-indexing required.")
         else:
-            self._guess_embedding_type()
-    
-    def _guess_embedding_type(self) -> None:
-        """Guess embedding type from database path"""
-        db_path = ""
-        if self.collection and hasattr(self.collection, '_client'):
-            client = getattr(self.collection, '_client')
-            if hasattr(client, '_path'):
-                db_path = str(getattr(client, '_path'))
-        
-        if "ollama" in db_path:
-            self.embedding_type = "ollama"
-            self.embedding_model = OLLAMA_EMBEDDING_MODEL
-        elif "optimized" in db_path:
-            self.embedding_type = "local"
-            self.embedding_model = EMBEDDING_MODEL
-        elif "remote" in db_path or "gpu" in db_path:
-            self.embedding_type = "remote"
-            self.embedding_model = EMBEDDING_MODEL
-        else:
-            # Default to configuration
-            if USE_LOCAL_EMBEDDINGS:
-                self.embedding_type = "local"
-            else:
-                self.embedding_type = "remote"
-            self.embedding_model = EMBEDDING_MODEL
+            console.print(f"[red]No metadata file found at {metadata_path}[/red]")
+            console.print("[red]Please index your repository first with: python index.py /path/to/repository[/red]")
+            raise Exception("No index metadata found. Please run indexing first.")
     
     def get_embedding(self, text: str) -> List[float]:
         """Get embedding using the appropriate method"""
@@ -272,7 +240,8 @@ Format your entire response using markdown with appropriate headers, code blocks
                         "role": "user",
                         "content": prompt
                     }
-                ]
+                ], 
+                think=False
             ))
             # Handle the response - expect dict with 'message' key
             if hasattr(response, 'get') and response.get('message'):
@@ -311,7 +280,7 @@ def main() -> None:
         console.print("[red]Usage: python ask.py [output_file.md][/red]")
         sys.exit(1)
     
-    output_file = sys.argv[1] if len(sys.argv) == 2 else DEFAULT_OUTPUT_FILE
+    output_file = sys.argv[1] if len(sys.argv) == 2 else get_default_output_file()
     
     console.print(f"\n[bold cyan]Log Query Tool[/bold cyan]")
     console.print(f"Output file: [cyan]{output_file}[/cyan]")

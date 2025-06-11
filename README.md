@@ -50,7 +50,7 @@ Edit `.env` to configure your setup:
 ```bash
 # Ollama Configuration
 OLLAMA_HOST=http://localhost:11434
-OLLAMA_MODEL=dolphincoder:15b
+OLLAMA_MODEL=qwen3:8b
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text:latest
 
 # Embedding Configuration  
@@ -167,7 +167,7 @@ python ask.py my_queries.md
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
-| `OLLAMA_MODEL` | LLM model for responses | `dolphincoder:15b` |
+| `OLLAMA_MODEL` | LLM model for responses | `qwen3:8b` |
 | `OLLAMA_EMBEDDING_MODEL` | Ollama embedding model | `nomic-embed-text:latest` |
 | `EMBEDDING_SERVER` | Remote embedding server URL | `http://localhost:5000` |
 | `EMBEDDING_MODEL` | Embedding model name | `nomic-ai/nomic-embed-text-v1.5` |
@@ -184,7 +184,7 @@ python ask.py my_queries.md
 #### Indexing (`index.py`)
 
 ```bash
-python index.py <repository> [options]
+python index.py /path/to/files/ [options]
 
 Options:
   --local-embeddings     Use local SentenceTransformer (default)
@@ -293,16 +293,16 @@ python embedding_server.py \
   --batch-size 64
 ```
 
-### Multiple Repositories
+### Multiple Folders
 
-Index multiple repositories to the same database:
+Index multiple folders to the same database:
 
 ```bash
-# Index first repo
-python index.py /path/to/logs1 --chroma-path ./shared_db
+# Index first folder
+python index.py /path/to/files1 --chroma-path ./shared_db
 
-# Add second repo to same database  
-python index.py /path/to/logs2 --chroma-path ./shared_db
+# Add second folder to same database  
+python index.py /path/to/files2 --chroma-path ./shared_db
 ```
 
 ### Ollama Integration
@@ -311,11 +311,23 @@ Ensure Ollama is running with required models:
 
 ```bash
 # Install Ollama models
-ollama pull dolphincoder:15b
-ollama pull nomic-embed-text
+ollama pull qwen3:8b
+ollama pull nomic-embed-text:latest
 
 # Start Ollama (usually runs as service)
 ollama serve
+```
+
+#### Useful Ollama ENV variables
+
+```bash
+OLLAMA_CONTEXT_LENGTH:8192 
+OLLAMA_DEBUG:INFO 
+OLLAMA_HOST:http://0.0.0.0:11434 
+OLLAMA_INTEL_GPU:false 
+OLLAMA_KEEP_ALIVE:3h
+OLLAMA_MAX_LOADED_MODELS:1 
+OLLAMA_MAX_QUEUE:512 
 ```
 
 ## API Endpoints
@@ -361,6 +373,7 @@ The system uses a single standardized configuration:
 - **tiktoken**: Token counting utilities
 - **einops**: Tensor operations for advanced models
 - **requests**: HTTP client for remote services
+- **pypdf***: PDF parsing library
 
 ## File Structure
 
@@ -373,10 +386,6 @@ The system uses a single standardized configuration:
 ├── .env_example         # Environment configuration template
 └── chroma_db/           # Default ChromaDB storage (created after indexing)
 ```
-
-## License
-
-This project is designed for local development and research use. Please ensure compliance with the terms of service for any external models or APIs used.
 
 ## Contributions
 

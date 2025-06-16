@@ -320,6 +320,8 @@ ollama serve
 
 #### Useful Ollama ENV variables
 
+Ollama environment variables can be set in the environment you are running in. In Windows that's done by searching for "Environment Vairables" and adding each relevant description to the "Variable Name" and each value to the "Variable Value" fields. In Linux (most) you'll add these to your .bashrc as shown below or added to your systemctl ollama.service file as `Environment="OLLAMA_HOST=0.0.0.0"` etc. MacOs users can edit thewir .zprofile file and add as below.
+
 ```bash
 OLLAMA_CONTEXT_LENGTH:8192 
 OLLAMA_DEBUG:INFO 

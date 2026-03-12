@@ -1,6 +1,8 @@
-.gitignore
+.env
 venv/
+.venv/
 .vscode/
 __pycache__/
 chroma_db/
-*-queries.md
+*.pyc
+.pytest_cache/

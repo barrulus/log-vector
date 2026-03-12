@@ -17,16 +17,13 @@ Options:
 """
 
 import argparse
-import os
 import logging
 from typing import Any, Dict, Optional, cast
 from flask import Flask, request, jsonify
 from sentence_transformers import SentenceTransformer
 import torch
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+from config import EMBEDDING_MODEL
 
 app = Flask(__name__)
 
@@ -37,27 +34,27 @@ logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %
 model: Optional[SentenceTransformer] = None
 device: Optional[str] = None
 args: Optional[argparse.Namespace] = None
-model_cache: Dict[str, SentenceTransformer] = {}  # Cache models with different trust settings
+model_cache: Dict[str, SentenceTransformer] = {}
 
 
 def initialize_model() -> None:
     """Initialize the SentenceTransformer model"""
     global model, device
-    
+
     if args is None:
         raise RuntimeError("Arguments not initialized")
-    
+
     print(f"\nLoading SentenceTransformer model: {args.model}")
-    
+
     # GPU Acceleration Diagnostics
     print("\nGPU Acceleration Diagnostics:")
     print(f"PyTorch version: {torch.__version__}")
     print(f"CUDA available: {torch.cuda.is_available()}")
-    
+
     # Check for MPS (Apple Silicon GPU)
     mps_available = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
     print(f"MPS (Apple Silicon) available: {mps_available}")
-    
+
     if torch.cuda.is_available():
         if hasattr(torch, 'version') and hasattr(torch.version, 'cuda') and torch.version.cuda:  # type: ignore[attr-defined]
             print(f"PyTorch CUDA version: {torch.version.cuda}")  # type: ignore[attr-defined]
@@ -78,86 +75,98 @@ def initialize_model() -> None:
         print("- PyTorch not compiled with GPU support")
         print("- Missing drivers or environment setup")
         device = 'cpu'
-    
+
     print(f"\nUsing device: {device}")
-    
-    # Determine trust setting for default model
+
+    # Determine trust setting using the server's own policy
+    from trust_manager import TrustManager
+    trust_manager = TrustManager()
+
     if args.trust_remote_code:
         default_trust = True
         print(f"Using --trust-remote-code flag: trust_remote_code=True for {args.model}")
     else:
-        from trust_manager import TrustManager
-        trust_manager = TrustManager()
-        default_trust = trust_manager.check_model_needs_trust(args.model)
-        print(f"Auto-detected trust_remote_code={default_trust} for {args.model}")
-    
+        default_trust = trust_manager.get_trust_setting(args.model, interactive=True)
+        print(f"Trust setting: trust_remote_code={default_trust} for {args.model}")
+
     # Load default model with appropriate trust setting
     model = get_or_load_model(args.model, default_trust)
-    
+
     print(f"Default model loaded: {args.model}")
     print(f"Max sequence length: {args.max_length}")
     print(f"Batch size: {args.batch_size}")
-    print(f"Note: Client requests can override model and trust settings")
 
 
 def get_or_load_model(model_name: str, trust_remote_code: bool) -> SentenceTransformer:
     """Get or load a model with specific trust_remote_code setting"""
     global model_cache, device, args
-    from sentence_transformers import SentenceTransformer
-    
+    from sentence_transformers import SentenceTransformer as ST
+
     if args is None:
         raise RuntimeError("Server not initialized")
-    
+
     # Create cache key
     cache_key = f"{model_name}:trust={trust_remote_code}"
-    
+
     if cache_key not in model_cache:
         print(f"Loading model {model_name} with trust_remote_code={trust_remote_code}")
-        loaded_model = SentenceTransformer(model_name, device=device, trust_remote_code=trust_remote_code)
+        loaded_model = ST(model_name, device=device, trust_remote_code=trust_remote_code)
         loaded_model.max_seq_length = args.max_length
         model_cache[cache_key] = loaded_model
-    
+
     return model_cache[cache_key]
+
+
+def _resolve_trust(model_name: str) -> bool:
+    """Resolve trust_remote_code for a model using the server's own policy."""
+    from trust_manager import TrustManager
+    tm = TrustManager()
+    return tm.get_trust_setting(model_name, interactive=False)
 
 
 @app.route('/embed', methods=['POST'])
 def embed() -> Any:
-    """Generate embeddings for provided texts"""
+    """Generate embeddings for provided texts.
+
+    The server determines trust_remote_code from its own policy — client
+    requests cannot override it.
+    """
     try:
         if args is None:
             return jsonify({'error': 'Server not initialized'}), 500
-            
+
         data = request.json
         if data is None:
             return jsonify({'error': 'No JSON data provided'}), 400
         data = cast(Dict[str, Any], data)
-            
+
         texts = data.get('texts', [])
         request_model = data.get('model', args.model)
-        trust_remote_code = data.get('trust_remote_code', False)
-        
+
         if not texts:
             return jsonify({'error': 'No texts provided'}), 400
-        
+
+        # Server decides trust policy — client value is ignored
+        trust_remote_code = _resolve_trust(request_model)
+
         # Get the appropriate model
         model_to_use = get_or_load_model(request_model, trust_remote_code)
-        
+
         # Generate embeddings on GPU/CPU
         embeddings_result = cast(Any, model_to_use.encode(  # type: ignore[misc]
-            texts, 
-            batch_size=args.batch_size, 
+            texts,
+            batch_size=args.batch_size,
             show_progress_bar=False,
             convert_to_numpy=True
         ))
         embeddings = embeddings_result.tolist()
-        
+
         return jsonify({
             'embeddings': embeddings,
             'model': request_model,
-            'trust_remote_code': trust_remote_code,
             'count': len(embeddings)
         })
-    
+
     except Exception as e:
         # Log the full error details for debugging
         logging.error(f"Error in /embed endpoint: {str(e)}", exc_info=True)
@@ -170,7 +179,7 @@ def health() -> Any:
     """Health check endpoint"""
     if args is None:
         return jsonify({'error': 'Server not initialized'}), 500
-        
+
     return jsonify({
         'status': 'healthy',
         'device': device,
@@ -184,7 +193,7 @@ def info() -> Any:
     """Get server information"""
     if args is None:
         return jsonify({'error': 'Server not initialized'}), 500
-        
+
     gpu_info: Dict[str, Dict[str, str]] = {}
     if torch.cuda.is_available():
         for i in range(torch.cuda.device_count()):
@@ -193,7 +202,7 @@ def info() -> Any:
                 "name": torch.cuda.get_device_name(i),
                 "memory_gb": f"{props.total_memory / 1024**3:.1f}"
             }
-    
+
     return jsonify({
         'server': 'SentenceTransformer Embedding Server',
         'version': '1.0',
@@ -210,13 +219,13 @@ def info() -> Any:
 
 def main() -> None:
     global args
-    
+
     parser = argparse.ArgumentParser(
         description='Embedding server using SentenceTransformer',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    
+
     parser.add_argument(
         '--host',
         type=str,
@@ -232,7 +241,7 @@ def main() -> None:
     parser.add_argument(
         '--model',
         type=str,
-        default=os.getenv('EMBEDDING_MODEL', 'nomic-ai/nomic-embed-text-v1.5'),
+        default=EMBEDDING_MODEL,
         help='SentenceTransformer model to use'
     )
     parser.add_argument(
@@ -257,12 +266,12 @@ def main() -> None:
         action='store_true',
         help='Force trust_remote_code=True for default model (auto-detected if not specified)'
     )
-    
+
     args = parser.parse_args()
-    
+
     # Initialize model
     initialize_model()
-    
+
     # Run server
     print(f"\nStarting embedding server on {args.host}:{args.port}")
     print(f"Model: {args.model}")
@@ -271,7 +280,7 @@ def main() -> None:
     print(f"  POST /embed  - Generate embeddings")
     print(f"  GET  /health - Health check")
     print(f"  GET  /info   - Server information")
-    
+
     app.run(
         host=args.host,
         port=args.port,

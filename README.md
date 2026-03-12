@@ -53,13 +53,14 @@ OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=qwen3:8b
 OLLAMA_EMBEDDING_MODEL=nomic-embed-text:latest
 
-# Embedding Configuration  
+# Embedding Configuration
 EMBEDDING_SERVER=http://localhost:5000
 EMBEDDING_MODEL=nomic-ai/nomic-embed-text-v1.5
 
 # Storage Configuration
 CHROMA_PATH=./chroma_db
 DEFAULT_CHUNK_SIZE=2000
+DEFAULT_CHUNK_OVERLAP=200
 
 # Default Settings
 USE_LOCAL_EMBEDDINGS=true
@@ -100,6 +101,9 @@ python index.py /path/to/logs --model custom-model --chunk-size 1500
 
 # Custom ChromaDB path
 python index.py /path/to/logs --chroma-path ./my_custom_db
+
+# Add a second folder to the same database
+python index.py /path/to/more-logs --chroma-path ./my_custom_db --append
 ```
 
 ### 4. Query Your Indexed Content
@@ -116,38 +120,45 @@ The system will:
 - Generate responses using Ollama's local LLM
 - Generate an output file ask-YYYY-Month-DD-HH-MM.md
 
-Or specify a custom output file:
+Or specify options:
 
 ```bash
+# Custom output file
 python ask.py my_queries.md
+
+# Change the number of results and LLM model
+python ask.py --top-k 10 --model llama3:8b
 ```
 
 ## Architecture
 
 ### Core Components
 
-1. **Unified Indexer (`index.py`)**
+1. **Shared Configuration (`config.py`)**
+   - Single source of truth for all environment variables and defaults
+   - Used by all other modules
+
+2. **Unified Indexer (`index.py`)**
    - Processes repositories with automatic file detection
    - Supports multiple embedding strategies via handler classes
-   - Chunks content into configurable segments (configured via DEFAULT_CHUNK_SIZE)
-   - Client-side trust_remote_code management
+   - Chunks content into configurable overlapping segments
    - Stores embeddings in ChromaDB (collection: 'vectors') with metadata tracking
+   - Supports `--append` mode for indexing multiple folders into one database
 
-2. **Query Interface (`ask.py`)**  
+3. **Query Interface (`ask.py`)**
    - Interactive CLI for natural language queries
    - Auto-detects embedding type and trust settings from metadata
+   - Reuses embedding handler classes from `index.py` for consistency
    - Generates responses using Ollama's local LLM
-   - Consistent security model with indexing phase
    - Saves all Q&A pairs with timestamps as markdown files
 
-3. **Embedding Server (`embedding_server.py`)**
+4. **Embedding Server (`embedding_server.py`)**
    - Optional remote embedding service with GPU support
-   - Respects client-side trust_remote_code decisions
+   - Server-side trust policy enforcement (client cannot override)
    - RESTful API with health checks and server info
-   - Dynamic model loading with trust setting caching
-   - Supports batch processing and multiple model variants
+   - Dynamic model loading with caching
 
-4. **Trust Manager (`trust_manager.py`)**
+5. **Trust Manager (`trust_manager.py`)**
    - Centralized security management for trust_remote_code
    - Auto-detection of models requiring remote code execution
    - Interactive consent prompts with risk/benefit explanations
@@ -173,10 +184,9 @@ python ask.py my_queries.md
 | `EMBEDDING_MODEL` | Embedding model name | `nomic-ai/nomic-embed-text-v1.5` |
 | `CHROMA_PATH` | ChromaDB storage path | `./chroma_db` |
 | `DEFAULT_CHUNK_SIZE` | Default text chunk size | `2000` |
+| `DEFAULT_CHUNK_OVERLAP` | Overlap between chunks | `200` |
 | `DEFAULT_OUTPUT_FILE_PREFIX` | Prefix for auto-generated output files | `ask` |
 | `DEFAULT_TOP_K` | Default number of results to retrieve | `5` |
-| `USE_LOCAL_EMBEDDINGS` | Default embedding strategy | `true` |
-| `USE_LOCAL_OLLAMA` | Use local Ollama instance | `true` |
 | `TRUST_REMOTE_CODE_*` | Model-specific trust settings | Auto-managed |
 
 ### Command Line Options
@@ -188,11 +198,23 @@ python index.py /path/to/files/ [options]
 
 Options:
   --local-embeddings     Use local SentenceTransformer (default)
-  --ollama-embeddings    Use Ollama embedding API  
+  --ollama-embeddings    Use Ollama embedding API
   --remote-embeddings    Use remote embedding server
   --model MODEL          Override embedding model
   --chunk-size SIZE      Text chunk size (default from DEFAULT_CHUNK_SIZE env var)
+  --chunk-overlap SIZE   Overlap between chunks (default from DEFAULT_CHUNK_OVERLAP env var)
   --chroma-path PATH     ChromaDB storage path
+  --append               Add to existing collection instead of replacing it
+```
+
+#### Querying (`ask.py`)
+
+```bash
+python ask.py [output_file.md] [options]
+
+Options:
+  --top-k N              Number of results to retrieve (default from DEFAULT_TOP_K env var)
+  --model MODEL          Ollama LLM model for responses
 ```
 
 #### Embedding Server (`embedding_server.py`)
@@ -202,11 +224,12 @@ python embedding_server.py [options]
 
 Options:
   --host HOST            Bind host (default: 0.0.0.0)
-  --port PORT            Bind port (default: 5000)  
+  --port PORT            Bind port (default: 5000)
   --model MODEL          SentenceTransformer model
   --max-length LENGTH    Max sequence length (default: 512)
   --batch-size SIZE      Encoding batch size (default: 32)
   --debug                Enable debug mode
+  --trust-remote-code    Force trust for default model
 ```
 
 ## Security: Trust Remote Code Management
@@ -215,16 +238,16 @@ The system includes a comprehensive security framework for models that require `
 
 - **Auto-detects** which models likely need remote code execution based on known patterns
 - **Prompts for informed consent** with detailed security warnings
-- **Persists decisions** in `.env` with model-specific hash tracking
+- **Persists decisions** in `.env` with readable model-specific keys
 - **Client-side control** - trust decisions made locally, not on remote servers
-- **Cross-component consistency** - same security model for indexing, querying, and serving
+- **Server-side enforcement** - the embedding server uses its own trust policy and ignores client requests to override it
 
 ### How It Works
 
 1. **Detection**: System analyzes model names against known patterns
-2. **User Consent**: Interactive prompts with clear risk/benefit explanations  
-3. **Persistence**: Decisions saved locally with model identification hashes
-4. **Communication**: Client sends trust settings to remote embedding servers
+2. **User Consent**: Interactive prompts with clear risk/benefit explanations
+3. **Persistence**: Decisions saved locally with human-readable keys
+4. **Communication**: Server determines its own trust policy independently
 
 ### Managing Trust Settings
 
@@ -269,11 +292,11 @@ Approval decisions are stored in your `.env` file:
 
 ```bash
 # Example entries (automatically managed)
-# TRUST_REMOTE_CODE_A1B2C3D4_MODEL=nomic-ai/nomic-embed-text-v1.5
-TRUST_REMOTE_CODE_A1B2C3D4=true
+# TRUST_REMOTE_CODE_NOMIC_AI__NOMIC_EMBED_TEXT_V1_5_MODEL=nomic-ai/nomic-embed-text-v1.5
+TRUST_REMOTE_CODE_NOMIC_AI__NOMIC_EMBED_TEXT_V1_5=true
 
-# TRUST_REMOTE_CODE_E5F6G7H8_MODEL=sentence-transformers/all-MiniLM-L6-v2  
-TRUST_REMOTE_CODE_E5F6G7H8=false
+# TRUST_REMOTE_CODE_SENTENCE_TRANSFORMERS__ALL_MINILM_L6_V2_MODEL=sentence-transformers/all-MiniLM-L6-v2
+TRUST_REMOTE_CODE_SENTENCE_TRANSFORMERS__ALL_MINILM_L6_V2=false
 ```
 
 ## Advanced Usage
@@ -295,14 +318,14 @@ python embedding_server.py \
 
 ### Multiple Folders
 
-Index multiple folders to the same database:
+Index multiple folders to the same database using `--append`:
 
 ```bash
 # Index first folder
 python index.py /path/to/files1 --chroma-path ./shared_db
 
-# Add second folder to same database  
-python index.py /path/to/files2 --chroma-path ./shared_db
+# Add second folder to same database
+python index.py /path/to/files2 --chroma-path ./shared_db --append
 ```
 
 ### Ollama Integration
@@ -320,16 +343,16 @@ ollama serve
 
 #### Useful Ollama ENV variables
 
-Ollama environment variables can be set in the environment you are running in. In Windows that's done by searching for "Environment Vairables" and adding each relevant description to the "Variable Name" and each value to the "Variable Value" fields. In Linux (most) you'll add these to your .bashrc as shown below or added to your systemctl ollama.service file as `Environment="OLLAMA_HOST=0.0.0.0"` etc. MacOs users can edit thewir .zprofile file and add as below.
+Ollama environment variables can be set in the environment you are running in. In Windows that's done by searching for "Environment Variables" and adding each relevant description to the "Variable Name" and each value to the "Variable Value" fields. In Linux (most) you'll add these to your .bashrc as shown below or added to your systemctl ollama.service file as `Environment="OLLAMA_HOST=0.0.0.0"` etc. macOS users can edit their .zprofile file and add as below.
 
 ```bash
-OLLAMA_CONTEXT_LENGTH:8192 
-OLLAMA_DEBUG:INFO 
-OLLAMA_HOST:http://0.0.0.0:11434 
-OLLAMA_INTEL_GPU:false 
+OLLAMA_CONTEXT_LENGTH:8192
+OLLAMA_DEBUG:INFO
+OLLAMA_HOST:http://0.0.0.0:11434
+OLLAMA_INTEL_GPU:false
 OLLAMA_KEEP_ALIVE:3h
-OLLAMA_MAX_LOADED_MODELS:1 
-OLLAMA_MAX_QUEUE:512 
+OLLAMA_MAX_LOADED_MODELS:1
+OLLAMA_MAX_QUEUE:512
 ```
 
 ## API Endpoints
@@ -337,7 +360,7 @@ OLLAMA_MAX_QUEUE:512
 The embedding server provides RESTful endpoints:
 
 - `POST /embed` - Generate embeddings for text arrays
-- `GET /health` - Health check with server status  
+- `GET /health` - Health check with server status
 - `GET /info` - Detailed server and GPU information
 
 Example request:
@@ -372,25 +395,26 @@ The system uses a single standardized configuration:
 - **rich**: Enhanced terminal output and markdown rendering
 - **flask**: Web server for embedding API
 - **python-dotenv**: Environment configuration management
-- **tiktoken**: Token counting utilities
 - **einops**: Tensor operations for advanced models
 - **requests**: HTTP client for remote services
-- **pypdf***: PDF parsing library
+- **pypdf**: PDF parsing library
 
 ## File Structure
 
 ```
+├── config.py             # Shared configuration (env vars, defaults)
 ├── index.py              # Unified indexing script
-├── ask.py                # Interactive query interface  
+├── ask.py                # Interactive query interface
 ├── embedding_server.py   # Remote embedding server
 ├── trust_manager.py      # Security: trust_remote_code management
+├── tests/                # Unit tests
 ├── requirements.txt      # Python dependencies
-├── .env_example         # Environment configuration template
-└── chroma_db/           # Default ChromaDB storage (created after indexing)
+├── .env.example          # Environment configuration template
+└── chroma_db/            # Default ChromaDB storage (created after indexing)
 ```
 
 ## Contributions
 
-I welcome any assistance on this project, especially around trying new models for better performance and testing against ore logs than I have at my disposal!
+I welcome any assistance on this project, especially around trying new models for better performance and testing against more logs than I have at my disposal!
 
 Please just fork off of dev and then submit a PR

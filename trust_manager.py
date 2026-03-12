@@ -7,6 +7,7 @@ Saves approval state in .env with model tracking for security.
 """
 
 import os
+import re
 from typing import Optional, TYPE_CHECKING
 from dotenv import load_dotenv
 
@@ -17,27 +18,37 @@ if TYPE_CHECKING:
 load_dotenv()
 
 
+def _slugify_model(model_name: str) -> str:
+    """Convert a model name to a safe environment-variable suffix.
+
+    e.g. 'nomic-ai/nomic-embed-text-v1.5' -> 'NOMIC_AI__NOMIC_EMBED_TEXT_V1_5'
+    """
+    slug = model_name.upper()
+    slug = slug.replace('/', '__')
+    slug = re.sub(r'[^A-Z0-9_]', '_', slug)
+    # Collapse multiple underscores
+    slug = re.sub(r'_+', '_', slug)
+    return slug.strip('_')
+
+
 class TrustManager:
     """Manages trust_remote_code consent and detection"""
-    
+
     def __init__(self, env_file: str = '.env'):
         self.env_file = env_file
         self._ensure_env_file()
-    
+
     def _ensure_env_file(self) -> None:
         """Ensure .env file exists"""
         if not os.path.exists(self.env_file):
             with open(self.env_file, 'w') as f:
                 f.write("# Trust Remote Code Settings\n")
-                f.write("# Format: TRUST_REMOTE_CODE_<MODEL_HASH>=true|false\n\n")
-    
+                f.write("# Format: TRUST_REMOTE_CODE_<MODEL_SLUG>=true|false\n\n")
+
     def _model_to_key(self, model_name: str) -> str:
         """Convert model name to environment variable key"""
-        # Create a hash of the model name for consistent key generation
-        import hashlib
-        model_hash = hashlib.md5(model_name.encode()).hexdigest()[:8]
-        return f"TRUST_REMOTE_CODE_{model_hash.upper()}"
-    
+        return f"TRUST_REMOTE_CODE_{_slugify_model(model_name)}"
+
     def _get_model_approval(self, model_name: str) -> Optional[bool]:
         """Check if model has been approved for trust_remote_code"""
         key = self._model_to_key(model_name)
@@ -45,45 +56,52 @@ class TrustManager:
         if value is None:
             return None
         return value.lower() == 'true'
-    
+
     def set_model_approval(self, model_name: str, approved: bool) -> None:
         """Save model approval to .env file"""
         key = self._model_to_key(model_name)
         value = 'true' if approved else 'false'
-        
-        # Add comment with model name for clarity
-        comment_key = f"# {key}_MODEL"
-        
+
+        # Comment that documents which model this key belongs to
+        comment_line = f"# {key}_MODEL={model_name}\n"
+        setting_line = f"{key}={value}\n"
+
         # Read existing content
         env_content: list[str] = []
         if os.path.exists(self.env_file):
             with open(self.env_file, 'r') as f:
                 env_content = f.readlines()
-        
-        # Remove existing entries for this model
+
+        # Remove existing entries for this key
         filtered_content: list[str] = []
         skip_next = False
         for line in env_content:
             if skip_next:
                 skip_next = False
                 continue
-            if line.strip() == f"{comment_key}={model_name}":
+            stripped = line.strip()
+            if stripped.startswith(f"# {key}_MODEL="):
                 skip_next = True  # Skip the next line (the actual setting)
                 continue
-            if not line.startswith(key + '='):
-                filtered_content.append(line)
-        
+            if stripped.startswith(f"{key}="):
+                continue
+            filtered_content.append(line)
+
+        # Ensure the file ends with a newline before appending
+        if filtered_content and not filtered_content[-1].endswith('\n'):
+            filtered_content[-1] += '\n'
+
         # Add new entries
-        filtered_content.append(f"{comment_key}={model_name}\n")
-        filtered_content.append(f"{key}={value}\n")
-        
+        filtered_content.append(comment_line)
+        filtered_content.append(setting_line)
+
         # Write back to file
         with open(self.env_file, 'w') as f:
             f.writelines(filtered_content)
-        
+
         # Reload environment
         load_dotenv(override=True)
-    
+
     def check_model_needs_trust(self, model_name: str) -> bool:
         """
         Auto-detect if a model requires trust_remote_code.
@@ -96,29 +114,29 @@ class TrustManager:
             'sentence-transformers/all-mpnet-base-v2',
             # Add more patterns as needed
         ]
-        
+
         # Known models that don't require trust_remote_code
         safe_patterns = [
             'sentence-transformers/all-MiniLM',
             'sentence-transformers/paraphrase',
             'sentence-transformers/multi-qa',
         ]
-        
+
         model_lower = model_name.lower()
-        
+
         # Check safe patterns first
         for pattern in safe_patterns:
             if pattern.lower() in model_lower:
                 return False
-        
+
         # Check trust required patterns
         for pattern in trust_required_patterns:
             if pattern.lower() in model_lower:
                 return True
-        
+
         # For unknown models, assume trust might be needed
         return True
-    
+
     def prompt_user_consent(self, model_name: str) -> bool:
         """Prompt user for consent to use trust_remote_code"""
         print(f"\n{'='*60}")
@@ -140,7 +158,7 @@ class TrustManager:
         print()
         print("Your choice will be saved for this model.")
         print(f"{'='*60}")
-        
+
         while True:
             try:
                 response = input("Allow remote code execution for this model? [y/N]: ").strip().lower()
@@ -153,15 +171,15 @@ class TrustManager:
             except KeyboardInterrupt:
                 print("\nOperation cancelled.")
                 return False
-    
+
     def get_trust_setting(self, model_name: str, interactive: bool = True) -> bool:
         """
         Get trust_remote_code setting for a model.
-        
+
         Args:
             model_name: Name of the model
             interactive: Whether to prompt user if not already approved
-            
+
         Returns:
             True if trust_remote_code should be used, False otherwise
         """
@@ -169,14 +187,14 @@ class TrustManager:
         approval = self._get_model_approval(model_name)
         if approval is not None:
             return approval
-        
+
         # Check if model needs trust_remote_code
         needs_trust = self.check_model_needs_trust(model_name)
         if not needs_trust:
             # Model is known safe, save this decision
             self.set_model_approval(model_name, False)
             return False
-        
+
         # Model might need trust, prompt user if interactive
         if interactive:
             user_approved = self.prompt_user_consent(model_name)
@@ -187,20 +205,20 @@ class TrustManager:
             print(f"Warning: Model {model_name} may require trust_remote_code but running in non-interactive mode.")
             print("Defaulting to False for security. Use interactive mode to approve.")
             return False
-    
+
     def list_approved_models(self) -> dict[str, bool]:
         """List all models and their approval status"""
         approved_models: dict[str, bool] = {}
-        
+
         # Read .env file and find trust settings
         if os.path.exists(self.env_file):
             with open(self.env_file, 'r') as f:
                 lines = f.readlines()
-            
+
             i = 0
             while i < len(lines):
                 line = lines[i].strip()
-                if line.startswith('# TRUST_REMOTE_CODE_') and line.endswith('_MODEL'):
+                if line.startswith('# TRUST_REMOTE_CODE_') and '_MODEL=' in line:
                     # This is a model comment line
                     model_name = line.split('=', 1)[1] if '=' in line else 'Unknown'
                     # Next line should be the setting
@@ -212,31 +230,31 @@ class TrustManager:
                     i += 2
                 else:
                     i += 1
-        
+
         return approved_models
 
 
 def safe_sentence_transformer_load(model_name: str, interactive: bool = True, **kwargs: object) -> 'SentenceTransformer':
     """
     Safely load a SentenceTransformer with trust_remote_code consent management.
-    
+
     Args:
         model_name: Name of the model to load
         interactive: Whether to prompt user for consent
         **kwargs: Additional arguments to pass to SentenceTransformer
-        
+
     Returns:
         Loaded SentenceTransformer model
     """
     from sentence_transformers import SentenceTransformer
-    
+
     trust_manager = TrustManager()
     trust_setting = trust_manager.get_trust_setting(model_name, interactive)
-    
+
     # Remove any existing trust_remote_code setting from kwargs
     kwargs_dict = dict(kwargs)
     kwargs_dict.pop('trust_remote_code', None)
-    
+
     if trust_setting:
         print(f"Loading {model_name} with trust_remote_code=True (user approved)")
         return SentenceTransformer(model_name, trust_remote_code=True, **kwargs_dict)  # type: ignore[misc]
@@ -257,15 +275,15 @@ def safe_sentence_transformer_load(model_name: str, interactive: bool = True, **
 if __name__ == "__main__":
     # CLI for managing trust settings
     import argparse
-    
+
     parser = argparse.ArgumentParser(description="Manage trust_remote_code settings")
     parser.add_argument('--list', action='store_true', help='List approved models')
     parser.add_argument('--check', type=str, help='Check if model needs trust_remote_code')
-    
+
     args = parser.parse_args()
-    
+
     trust_manager = TrustManager()
-    
+
     if args.list:
         models = trust_manager.list_approved_models()
         if models:
@@ -275,10 +293,10 @@ if __name__ == "__main__":
                 print(f"  {model}: {status}")
         else:
             print("No models have been evaluated yet.")
-    
+
     elif args.check:
         needs_trust = trust_manager.check_model_needs_trust(args.check)
         print(f"Model {args.check} {'likely needs' if needs_trust else 'probably does not need'} trust_remote_code")
-    
+
     else:
         parser.print_help()
